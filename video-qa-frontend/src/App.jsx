@@ -15,7 +15,7 @@ function App() {
   const conversationEndRef = useRef(null);
   const questionInputRef = useRef(null);
 
-  const API_BASE = 'http://localhost:8000';
+  const API_BASE = 'http://localhost:10000';
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
