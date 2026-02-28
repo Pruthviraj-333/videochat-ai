@@ -1,8 +1,8 @@
-# VideoChat AI 🎥🤖
+# VideoChat AI 
 
 VideoChat AI is an intelligent Video Q&A system that allows users to interact with YouTube videos using natural language. By leveraging Retrieval-Augmented Generation (RAG), the system extracts transcripts, chunks the content, and allows users to ask specific questions, receiving accurate answers based directly on the video's context.
 
-![VideoChat AI Demo](https://images.unsplash.com/photo-1611162617474-5b21e879e113?auto=format&fit=crop&q=80&w=1000)
+![VideoChat AI Banner](./assets/banner.png)
 
 ## ✨ Features
 
