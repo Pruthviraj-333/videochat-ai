@@ -61,7 +61,6 @@ pipeline {
         buildDiscarder(logRotator(numToKeepStr: '15', artifactNumToKeepStr: '5'))
         disableConcurrentBuilds()
         timeout(time: 30, unit: 'MINUTES')
-        ansiColor('xterm')
     }
 
     stages {
@@ -272,7 +271,7 @@ pipeline {
             echo " CI/CD PIPELINE SUCCEEDED"
             echo " Version  : ${env.IMAGE_TAG}"
             echo " Target   : http://${params.EC2_HOST}"
-            echo " Completed: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            echo " Completed: ${new Date().toString()}"
             echo "========================================================================"
         }
         failure {
