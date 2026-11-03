@@ -1,0 +1,35 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Local Qdrant storage (we use the Qdrant container in Docker)
+qdrant_storage/
+
+# Environment files — never bake secrets into the image
+.env
+.env.*
+
+# Test artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+tests/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+

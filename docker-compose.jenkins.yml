@@ -1,0 +1,42 @@
+# =============================================================================
+# docker-compose.jenkins.yml — Self-Hosted Jenkins Automation Server
+# =============================================================================
+# Spins up a complete Jenkins automation server with Docker-in-Docker socket
+# support, persistent storage, and pre-configured port mappings.
+#
+# Quickstart:
+#   docker compose -f docker-compose.jenkins.yml up -d
+#
+# Retrieve Initial Admin Password:
+#   docker exec videochat-jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+#
+# Access Web UI:
+#   http://localhost:8080
+# =============================================================================
+
+services:
+  jenkins:
+    build:
+      context: ./jenkins
+      dockerfile: Dockerfile
+    container_name: videochat-jenkins
+    restart: unless-stopped
+    user: "root" # Run as root or with docker gid to access /var/run/docker.sock
+
+    ports:
+      - "8080:8080"   # Jenkins Web Dashboard
+      - "50000:50000" # Jenkins Inbound Build Agent Port
+
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=true
+
+    volumes:
+      # Persistent storage for jobs, credentials, and build history
+      - jenkins_home:/var/jenkins_home
+      # Mount Docker daemon socket from host for containerized pipeline stages
+      - /var/run/docker.sock:/var/run/docker.sock
+
+volumes:
+  jenkins_home:
+    name: videochat_jenkins_home
+

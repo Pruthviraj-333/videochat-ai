@@ -1,0 +1,40 @@
+# =============================================================================
+# ruff.toml — Python Linter and Formatter Configuration
+# =============================================================================
+# Ruff enforces PEP 8 and detects potential bugs and anti-patterns.
+# Designed for fast feedback in both local development and CI pipelines.
+# =============================================================================
+
+target-version = "py311"
+line-length = 100
+
+exclude = [
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    "qdrant_storage",
+    "dist",
+    "node_modules",
+    "video-qa-frontend",
+]
+
+[lint]
+# Select core checks:
+# - E: pycodestyle errors
+# - F: Pyflakes (syntax errors, unused imports, undefined names)
+# - W: pycodestyle warnings
+select = ["E", "F", "W"]
+
+# Rules to ignore:
+# - E501: line length (tolerates long prompt templates and URLs)
+# - E722: bare except (used in legacy Qdrant collection check fallback)
+# - W293: blank line contains whitespace
+# - W291: trailing whitespace
+ignore = ["E501", "E722", "W293", "W291"]
+
+[lint.isort]
+known-first-party = ["main"]
+
+[format]
+quote-style = "double"
+indent-style = "space"

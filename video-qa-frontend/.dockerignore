@@ -1,0 +1,26 @@
+# Node modules — npm ci inside Docker will install these
+node_modules/
+
+# Vite build output — rebuilt inside Docker
+dist/
+
+# Environment files — do not bake secrets into the image
+.env
+.env.*
+.env.local
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docs / config that don't affect the build
+README.md
+

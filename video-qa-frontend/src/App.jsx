@@ -15,7 +15,9 @@ function App() {
   const conversationEndRef = useRef(null);
   const questionInputRef = useRef(null);
 
-  const API_BASE =  import.meta.env.VITE_API_URL ||'http://localhost:10000';
+  // VITE_API_URL: set explicitly for raw local dev (e.g. http://localhost:8000).
+  // In Docker, Nginx proxies /api -> backend so we use a relative path as default.
+  const API_BASE = import.meta.env.VITE_API_URL || '/api';
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {

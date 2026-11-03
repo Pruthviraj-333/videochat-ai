@@ -1,0 +1,25 @@
+# =============================================================================
+# terraform.tfvars.example — Example Variable Definitions
+# =============================================================================
+# Copy this file to terraform.tfvars and customize before running terraform apply:
+#   cp terraform.tfvars.example terraform.tfvars
+# =============================================================================
+
+aws_region         = "us-east-1"
+environment        = "production"
+vpc_cidr           = "10.0.0.0/16"
+public_subnet_cidr = "10.0.1.0/24"
+availability_zone  = "us-east-1a"
+instance_type      = "t3.micro"
+root_volume_size   = 30
+
+# Restrict SSH port 22 access to your personal/developer workstation IP:
+# E.g., "203.0.113.45/32"
+my_ip              = "0.0.0.0/0"
+
+# Existing EC2 Key Pair in your AWS account for SSH access
+key_name           = "videochat-key"
+
+# Specific Ubuntu AMI ID. Leave empty ("") to dynamically query latest Ubuntu 24.04 LTS
+ami_id             = "ami-0c7217cdde317cfec"
+

@@ -1,0 +1,31 @@
+# Root .dockerignore — prevents these from being sent as Docker build context
+# (applies when docker-compose builds from the repo root)
+
+# Git history
+.git/
+.gitignore
+
+# Docs
+README.md
+docs/
+
+# Terraform state (never bake into images)
+infra/
+*.tfstate
+*.tfstate.*
+*.tfvars
+
+# Scripts
+scripts/
+
+# Local dev
+.env
+.env.*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+

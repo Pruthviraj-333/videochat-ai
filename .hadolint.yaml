@@ -1,0 +1,22 @@
+# =============================================================================
+# .hadolint.yaml — Hadolint (Dockerfile Linter) Configuration
+# =============================================================================
+# Hadolint enforces best practices and detects anti-patterns in Dockerfiles.
+# In a DevOps pipeline, Hadolint runs in the Lint stage before image builds.
+#
+# Rules ignored with explanations:
+# - DL3008: Pin versions in apt-get. (Debian mirrors often delete old patch versions,
+#   which causes unexpected build breakages over time. Using slim base is preferred).
+# - DL3013: Pin versions in pip. (We upgrade pip to latest security patch before
+#   installing pinned requirements from requirements.txt).
+# - DL3066: Non-numeric user-id. (We explicitly create and use 'appuser' for readability).
+# =============================================================================
+
+ignored:
+  - DL3008
+  - DL3013
+  - DL3066
+
+# Fail on warnings or errors (strict linting)
+failure-threshold: warning
+

@@ -1,0 +1,122 @@
+# =============================================================================
+# docker-compose.yml — VideoChat AI full stack
+# =============================================================================
+# Services:
+#   qdrant   — vector database (official image, persisted volume)
+#   backend  — FastAPI RAG API (depends on qdrant being healthy)
+#   frontend — React app served by Nginx (proxies /api to backend)
+#
+# Usage:
+#   cp .env.example .env        # add your GROQ_API_KEY
+#   docker-compose up --build   # build and start everything
+#   docker-compose down -v      # stop and remove volumes
+#
+# Local note: if port 80 is taken (e.g. by Docker Desktop), the frontend is
+# mapped to 3000:80. On AWS EC2 change to "80:80".
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # Qdrant — vector database
+  # We run it as a separate service so it has its own lifecycle and its data
+  # survives container restarts via a named volume.
+  # ---------------------------------------------------------------------------
+  qdrant:
+    image: qdrant/qdrant:v1.15.0        # v1.15.x matches qdrant_client==1.16.2 (minor diff ≤1)
+    container_name: videochat-qdrant
+    restart: unless-stopped             # restart on crash, stop on `down`
+
+    volumes:
+      # Named volume: Qdrant data persists between `docker-compose down/up`
+      - qdrant_data:/qdrant/storage
+
+    ports:
+      # Expose 6333 (REST) to localhost for debugging; not needed in prod
+      - "6333:6333"
+
+    healthcheck:
+      # Qdrant's image has neither curl nor wget, but it does have bash.
+      # We use bash's built-in /dev/tcp to open a TCP connection to the
+      # Qdrant REST port — if it accepts the connection, Qdrant is up.
+      test: ["CMD-SHELL", "bash -c 'echo > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI
+  # ---------------------------------------------------------------------------
+  backend:
+    image: ${BACKEND_IMAGE:-videochat-backend}:${IMAGE_TAG:-latest}
+    build:
+      context: ./Backend              # Dockerfile is in the Backend directory
+      dockerfile: Dockerfile
+    container_name: videochat-backend
+    restart: unless-stopped
+
+    environment:
+      # Pass the Groq key from the .env file — it is NEVER hardcoded here
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      # Groq model to use (default: qwen/qwen3.8-27b which is available on all Groq tiers)
+      - GROQ_MODEL=${GROQ_MODEL:-qwen/qwen3.8-27b}
+      # Tell the backend to connect to the Qdrant container (not local files)
+      - QDRANT_URL=http://qdrant:6333
+      # Allow requests from the Nginx container (same Docker network, so
+      # same origin) and local dev ports
+      - CORS_ORIGINS=http://localhost:80,http://localhost:3000,http://localhost:5173
+
+    depends_on:
+      qdrant:
+        condition: service_healthy    # wait for Qdrant to pass its healthcheck
+
+    # No ports exposed to the host — Nginx is the only entry point.
+    # Uncomment the line below if you want to call the API directly during dev:
+    # ports:
+    #   - "8000:8000"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s           # model loading can take up to 60 s
+
+  # ---------------------------------------------------------------------------
+  # Frontend — React + Nginx
+  # ---------------------------------------------------------------------------
+  frontend:
+    image: ${FRONTEND_IMAGE:-videochat-frontend}:${IMAGE_TAG:-latest}
+    build:
+      context: ./video-qa-frontend    # Dockerfile is in the frontend directory
+      dockerfile: Dockerfile
+    container_name: videochat-frontend
+    restart: unless-stopped
+
+    ports:
+      # Host port -> Nginx port 80 inside container.
+      # Defaults to 80 on EC2; locally can be overridden via FRONTEND_PORT in .env
+      - "${FRONTEND_PORT:-80}:80"
+
+    depends_on:
+      backend:
+        condition: service_healthy    # don't start until backend is ready
+
+    healthcheck:
+      # nginx:alpine has wget but NOT bash or curl.
+      # Must use 127.0.0.1 explicitly — 'localhost' resolves via IPv6 in Alpine
+      # which doesn't reach the nginx socket bound to 0.0.0.0 (IPv4).
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null && exit 0 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  # Named volume for Qdrant storage — survives container restarts
+  qdrant_data:
+    name: videochat_qdrant_data
