@@ -7,6 +7,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api._errors import RequestBlocked, IpBlocked
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
@@ -15,7 +16,7 @@ from groq import Groq
 import os
 from dotenv import load_dotenv
 
-load_dotenv() 
+load_dotenv()
 
 # Initialize FastAPI
 app = FastAPI(title="Video Q&A RAG System")
@@ -23,7 +24,7 @@ app = FastAPI(title="Video Q&A RAG System")
 # CORS middleware
 # CORS_ORIGINS env var lets us add production origins at deploy time.
 # Defaults include both Vite dev servers. In Docker, Nginx proxies /api so
-# the browser origin is the same host ÃƒÂ¯Ã‚Â¿Ã‚Â½ "*" is safe there too.
+# the browser origin is the same host — "*" is safe there too.
 _cors_origins_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:5173")
 _cors_origins = [o.strip() for o in _cors_origins_raw.split(",") if o.strip()]
 app.add_middleware(
@@ -33,6 +34,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ---------------------------------------------------------------------------
+# YouTube proxy support — set YOUTUBE_PROXY to route transcript requests
+# through a residential or rotating proxy to avoid AWS IP blocks.
+# Format: http://user:password@proxy-host:port
+# ---------------------------------------------------------------------------
+YOUTUBE_PROXY = os.environ.get("YOUTUBE_PROXY")
 
 # Initialize components
 embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
@@ -68,7 +76,7 @@ class AnswerResponse(BaseModel):
 
 # Helper functions
 def get_ytt_client() -> YouTubeTranscriptApi:
-    """Initialize YouTubeTranscriptApi with browser headers and retry adapter to prevent 502/rate-limits"""
+    """Initialize YouTubeTranscriptApi with browser headers, retry adapter, and optional proxy."""
     session = requests.Session()
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retries))
@@ -76,12 +84,14 @@ def get_ytt_client() -> YouTubeTranscriptApi:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
     })
+    if YOUTUBE_PROXY:
+        session.proxies = {"http": YOUTUBE_PROXY, "https": YOUTUBE_PROXY}
     return YouTubeTranscriptApi(http_client=session)
 
 def extract_video_id(url: str) -> str:
     """Extract YouTube video ID from URL"""
     patterns = [
-        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([^&\n?#]+)',
+        r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([^\&\n?#]+)',
     ]
     for pattern in patterns:
         match = re.search(pattern, url)
@@ -93,7 +103,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[dic
     """Split text into overlapping chunks"""
     words = text.split()
     chunks = []
-    
+
     for i in range(0, len(words), chunk_size - overlap):
         chunk = ' '.join(words[i:i + chunk_size])
         if chunk:
@@ -101,14 +111,14 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[dic
                 "text": chunk,
                 "start_idx": i
             })
-    
+
     return chunks
 
 def create_collection_if_not_exists():
     """Create Qdrant collection if it doesn't exist"""
     try:
         qdrant_client.get_collection(COLLECTION_NAME)
-    except:
+    except Exception:
         qdrant_client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=VECTOR_SIZE, distance=Distance.COSINE)
@@ -136,19 +146,36 @@ async def process_video(request: VideoRequest):
     try:
         # Extract video ID
         video_id = extract_video_id(request.video_url)
-        
+
         # Get transcript using the correct API
         try:
             # Initialize the API instance
             ytt_api = get_ytt_client()
-            
+
             # Fetch transcript with language priority
             fetched_transcript = ytt_api.fetch(video_id, languages=['en', 'en-US', 'en-GB'])
-            
+
             # Convert to raw data and extract text
             transcript_data = fetched_transcript.to_raw_data()
             transcript_text = " ".join([item['text'] for item in transcript_data])
-            
+
+        except (RequestBlocked, IpBlocked):
+            # YouTube blocks requests from cloud provider IPs (AWS, GCP, Azure).
+            # Set YOUTUBE_PROXY env var with a residential proxy URL to work around this.
+            proxy_hint = (
+                " Set the YOUTUBE_PROXY environment variable to a residential proxy "
+                "(e.g. http://user:pass@host:port) and redeploy to fix this."
+                if not YOUTUBE_PROXY
+                else " The configured proxy was also blocked — try a different proxy."
+            )
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "YouTube is blocking transcript requests from this server's IP address. "
+                    "This typically happens because the server is hosted on a cloud provider "
+                    "(AWS, GCP, Azure) whose IP ranges are blocked by YouTube." + proxy_hint
+                ),
+            )
         except Exception as e:
             # Try alternative method if fetch fails
             try:
@@ -159,25 +186,40 @@ async def process_video(request: VideoRequest):
                     transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
                 transcript_data = transcript.fetch()
                 transcript_text = " ".join([item['text'] for item in transcript_data])
+            except (RequestBlocked, IpBlocked):
+                proxy_hint = (
+                    " Set the YOUTUBE_PROXY environment variable to a residential proxy "
+                    "(e.g. http://user:pass@host:port) and redeploy to fix this."
+                    if not YOUTUBE_PROXY
+                    else " The configured proxy was also blocked — try a different proxy."
+                )
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "YouTube is blocking transcript requests from this server's IP address. "
+                        "This typically happens because the server is hosted on a cloud provider "
+                        "(AWS, GCP, Azure) whose IP ranges are blocked by YouTube." + proxy_hint
+                    ),
+                )
             except Exception as e2:
                 raise HTTPException(
-                    status_code=400, 
+                    status_code=400,
                     detail=f"Failed to fetch transcript: {str(e)}. Alternative method also failed: {str(e2)}"
                 )
-        
+
         if not transcript_text.strip():
             raise HTTPException(status_code=400, detail="Transcript is empty")
-        
+
         # Chunk the transcript
         chunks = chunk_text(transcript_text)
-        
+
         if not chunks:
             raise HTTPException(status_code=400, detail="Failed to create chunks from transcript")
-        
+
         # Generate embeddings
         chunk_texts = [chunk["text"] for chunk in chunks]
         embeddings = list(embedding_model.embed(chunk_texts))
-        
+
         # Delete existing points for this video
         try:
             from qdrant_client.models import Filter, FieldCondition, MatchValue
@@ -192,9 +234,9 @@ async def process_video(request: VideoRequest):
                     ]
                 )
             )
-        except:
+        except Exception:
             pass  # Collection might be empty
-        
+
         # Store in Qdrant
         points = []
         for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
@@ -209,19 +251,19 @@ async def process_video(request: VideoRequest):
                 }
             )
             points.append(point)
-        
+
         qdrant_client.upsert(
             collection_name=COLLECTION_NAME,
             points=points
         )
-        
+
         return {
             "message": "Video processed successfully",
             "video_id": video_id,
             "chunks_created": len(chunks),
             "transcript_length": len(transcript_text)
         }
-        
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -240,13 +282,13 @@ async def ask_question(request: QuestionRequest):
     try:
         # Extract video ID
         video_id = extract_video_id(request.video_url)
-        
+
         # Generate question embedding
         question_embedding = list(embedding_model.embed([request.question]))[0]
-        
+
         # Search in Qdrant with proper filter
         from qdrant_client.models import Filter, FieldCondition, MatchValue
-        
+
         search_results = qdrant_client.query_points(
             collection_name=COLLECTION_NAME,
             query=question_embedding.tolist(),
@@ -260,17 +302,17 @@ async def ask_question(request: QuestionRequest):
             ),
             limit=5
         ).points
-        
+
         if not search_results:
             raise HTTPException(
-                status_code=404, 
+                status_code=404,
                 detail="No content found for this video. Please process the video first."
             )
-        
+
         # Extract relevant chunks
         relevant_chunks = [result.payload["text"] for result in search_results]
         context = "\n\n".join(relevant_chunks)
-        
+
         # Generate answer using Groq
         prompt = f"""You are a helpful assistant that answers questions about video content.
 
@@ -296,14 +338,14 @@ Please provide a clear, concise answer based on the context provided. If the con
             temperature=0.3,
             max_tokens=1024,
         )
-        
+
         answer = chat_completion.choices[0].message.content
-        
+
         return AnswerResponse(
             answer=answer,
             relevant_chunks=relevant_chunks
         )
-        
+
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
@@ -337,7 +379,8 @@ async def health_check():
     return {
         "status": "healthy",
         "qdrant": "connected",
-        "embedding_model": "loaded"
+        "embedding_model": "loaded",
+        "youtube_proxy_configured": bool(YOUTUBE_PROXY),
     }
 
 if __name__ == "__main__":

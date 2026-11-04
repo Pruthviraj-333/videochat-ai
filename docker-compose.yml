@@ -66,6 +66,8 @@ services:
       # Allow requests from the Nginx container (same Docker network, so
       # same origin) and local dev ports
       - CORS_ORIGINS=http://localhost:80,http://localhost:3000,http://localhost:5173
+      # YouTube proxy (optional residential proxy to bypass YouTube cloud IP block on AWS/GCP)
+      - YOUTUBE_PROXY=${YOUTUBE_PROXY:-}
 
     depends_on:
       qdrant:
