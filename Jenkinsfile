@@ -18,12 +18,12 @@ pipeline {
     parameters {
         string(
             name: 'DOCKERHUB_USER',
-            defaultValue: 'mayur5942',
+            defaultValue: 'pruthvirajjanwade333',
             description: 'Docker Hub username / namespace for application container images'
         )
         string(
             name: 'EC2_HOST',
-            defaultValue: '100.53.43.88',
+            defaultValue: '3.218.152.162',
             description: 'Target EC2 Public IP address (provisioned by Terraform in infra/)'
         )
         string(
@@ -86,11 +86,8 @@ pipeline {
                     steps {
                         echo "==> Running Hadolint on Backend and Frontend Dockerfiles..."
                         sh '''
-                            docker run --rm \
-                                -v "${WORKSPACE}/.hadolint.yaml:/.config/hadolint.yaml:ro" \
-                                -v "${WORKSPACE}/Backend/Dockerfile:/Backend.Dockerfile:ro" \
-                                -v "${WORKSPACE}/video-qa-frontend/Dockerfile:/Frontend.Dockerfile:ro" \
-                                hadolint/hadolint hadolint /Backend.Dockerfile /Frontend.Dockerfile
+                            docker run --rm -i hadolint/hadolint hadolint --ignore DL3008 --ignore DL3013 --ignore DL3066 - < Backend/Dockerfile
+                            docker run --rm -i hadolint/hadolint hadolint --ignore DL3008 --ignore DL3013 --ignore DL3066 - < video-qa-frontend/Dockerfile
                         '''
                     }
                 }
@@ -99,11 +96,7 @@ pipeline {
                     steps {
                         echo "==> Running Ruff on Backend source code..."
                         sh '''
-                            docker run --rm \
-                                -v "${WORKSPACE}:/workspace:ro" \
-                                -w /workspace \
-                                python:3.11-slim \
-                                sh -c "pip install -q ruff && ruff check Backend"
+                            ruff check Backend
                         '''
                     }
                 }
@@ -117,11 +110,9 @@ pipeline {
             steps {
                 echo "==> [3/8] Running pytest test suite..."
                 sh '''
-                    docker run --rm \
-                        -v "${WORKSPACE}/Backend:/app" \
-                        -w /app \
-                        python:3.11-slim \
-                        sh -c "pip install -q --no-cache-dir -r requirements.txt -r requirements-dev.txt && pytest -v --junitxml=junit.xml tests"
+                    cd Backend
+                    pip install -q --no-cache-dir -r requirements.txt -r requirements-dev.txt --break-system-packages
+                    pytest -v --junitxml=junit.xml tests
                 '''
             }
             post {
@@ -235,17 +226,21 @@ pipeline {
         stage('Deploy to Production EC2') {
             steps {
                 echo "==> [8/8] Deploying release '${env.IMAGE_TAG}' to EC2 (${params.EC2_HOST})..."
-                sshagent([env.EC2_SSH_CREDS_ID]) {
+                withCredentials([sshUserPrivateKey(
+                    credentialsId: env.EC2_SSH_CREDS_ID,
+                    keyFileVariable: 'SSH_KEY',
+                    usernameVariable: 'SSH_USER'
+                )]) {
                     sh """
                         # 1. Prepare target workspace on EC2
-                        ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} "mkdir -p /opt/videochat/scripts"
+                        ssh -i "\${SSH_KEY}" -o StrictHostKeyChecking=no \${SSH_USER}@${params.EC2_HOST} "mkdir -p /opt/videochat/scripts"
 
                         # 2. Transfer docker-compose.yml and deploy.sh
-                        scp -o StrictHostKeyChecking=no docker-compose.yml ${params.EC2_USER}@${params.EC2_HOST}:/opt/videochat/docker-compose.yml
-                        scp -o StrictHostKeyChecking=no scripts/deploy.sh ${params.EC2_USER}@${params.EC2_HOST}:/opt/videochat/scripts/deploy.sh
+                        scp -i "\${SSH_KEY}" -o StrictHostKeyChecking=no docker-compose.yml \${SSH_USER}@${params.EC2_HOST}:/opt/videochat/docker-compose.yml
+                        scp -i "\${SSH_KEY}" -o StrictHostKeyChecking=no scripts/deploy.sh \${SSH_USER}@${params.EC2_HOST}:/opt/videochat/scripts/deploy.sh
 
                         # 3. Trigger automated zero-downtime deployment script on EC2
-                        ssh -o StrictHostKeyChecking=no ${params.EC2_USER}@${params.EC2_HOST} \
+                        ssh -i "\${SSH_KEY}" -o StrictHostKeyChecking=no \${SSH_USER}@${params.EC2_HOST} \
                             "cd /opt/videochat && \
                              chmod +x scripts/deploy.sh && \
                              export BACKEND_IMAGE=${env.BACKEND_IMAGE_NAME} && \
