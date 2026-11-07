@@ -6,3 +6,4 @@ python-dotenv==1.2.1
 qdrant_client==1.16.2
 uvicorn==0.40.0
 youtube_transcript_api==1.2.3
+yt-dlp>=2024.12.0

@@ -2,12 +2,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
+import http.cookiejar
 import re
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import RequestBlocked, IpBlocked
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
@@ -40,11 +40,12 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# YouTube proxy support — set YOUTUBE_PROXY to route transcript requests
-# through a residential or rotating proxy to avoid AWS IP blocks.
-# Format: http://user:password@proxy-host:port
+# YouTube proxy & cookies support
+# Format YOUTUBE_PROXY: http://user:password@proxy-host:port
+# Format YOUTUBE_COOKIES_PATH: /app/cookies/cookies.txt (Netscape cookie file)
 # ---------------------------------------------------------------------------
 YOUTUBE_PROXY = os.environ.get("YOUTUBE_PROXY")
+YOUTUBE_COOKIES_PATH = os.environ.get("YOUTUBE_COOKIES_PATH", "/app/cookies/cookies.txt")
 
 # ---------------------------------------------------------------------------
 # Fallback Demo Transcript for Cloud IP Blocks
@@ -106,7 +107,7 @@ class AnswerResponse(BaseModel):
 
 # Helper functions
 def get_ytt_client() -> YouTubeTranscriptApi:
-    """Initialize YouTubeTranscriptApi with browser headers, retry adapter, and optional proxy."""
+    """Initialize YouTubeTranscriptApi with browser headers, retry adapter, optional proxy, and cookies."""
     session = requests.Session()
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retries))
@@ -116,7 +117,60 @@ def get_ytt_client() -> YouTubeTranscriptApi:
     })
     if YOUTUBE_PROXY:
         session.proxies = {"http": YOUTUBE_PROXY, "https": YOUTUBE_PROXY}
+
+    if (
+        YOUTUBE_COOKIES_PATH
+        and os.path.isfile(YOUTUBE_COOKIES_PATH)
+        and os.path.getsize(YOUTUBE_COOKIES_PATH) > 0
+    ):
+        try:
+            cookie_jar = http.cookiejar.MozillaCookieJar(YOUTUBE_COOKIES_PATH)
+            cookie_jar.load(ignore_discard=True, ignore_expires=True)
+            session.cookies = cookie_jar
+            logger.info("Loaded YouTube authentication cookies from %s", YOUTUBE_COOKIES_PATH)
+        except Exception as e:
+            logger.warning("Failed to parse cookies from %s: %s", YOUTUBE_COOKIES_PATH, e)
+
     return YouTubeTranscriptApi(http_client=session)
+
+def transcribe_with_groq_whisper(video_url: str) -> Optional[str]:
+    """Download audio stream via yt-dlp (with cookies if available) and transcribe via Groq Whisper API."""
+    try:
+        import tempfile
+        import yt_dlp
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_tmpl = os.path.join(tmpdir, "audio.%(ext)s")
+            ydl_opts = {
+                "format": "ba[ext=m4a]/ba/b",
+                "outtmpl": out_tmpl,
+                "quiet": True,
+                "noplaylist": True,
+            }
+            if (
+                YOUTUBE_COOKIES_PATH
+                and os.path.isfile(YOUTUBE_COOKIES_PATH)
+                and os.path.getsize(YOUTUBE_COOKIES_PATH) > 0
+            ):
+                ydl_opts["cookiefile"] = YOUTUBE_COOKIES_PATH
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(video_url, download=True)
+                downloaded_file = ydl.prepare_filename(info)
+
+            if not os.path.isfile(downloaded_file):
+                return None
+
+            with open(downloaded_file, "rb") as audio_file:
+                transcription = groq_client.audio.transcriptions.create(
+                    model="whisper-large-v3",
+                    file=audio_file,
+                    response_format="text",
+                )
+            return transcription
+    except Exception as e:
+        logger.warning("Groq Whisper transcription pipeline error: %s", e)
+        return None
 
 def extract_video_id(url: str) -> str:
     """Extract YouTube video ID from URL"""
@@ -168,10 +222,11 @@ async def root():
 async def process_video(request: VideoRequest):
     """
     Process a YouTube video:
-    1. Extract transcript (with graceful demo fallback if YouTube blocks datacenter IP)
-    2. Chunk the text
-    3. Generate embeddings
-    4. Store in Qdrant
+    1. Extract transcript (via YouTube API or Groq Whisper audio pipeline with cookie auth)
+    2. Fall back to demo transcript if cloud IP blocked and no cookies configured
+    3. Chunk the text
+    4. Generate embeddings
+    5. Store in Qdrant
     """
     try:
         # Extract video ID
@@ -182,20 +237,15 @@ async def process_video(request: VideoRequest):
         if request.transcript and request.transcript.strip():
             transcript_text = request.transcript.strip()
         else:
-            # Try fetching from YouTubeTranscriptApi
+            # 1. Try primary method: YouTubeTranscriptApi (fastest, uses cookies if configured)
+            transcript_text = ""
             try:
                 ytt_api = get_ytt_client()
                 fetched_transcript = ytt_api.fetch(video_id, languages=['en', 'en-US', 'en-GB'])
                 transcript_data = fetched_transcript.to_raw_data()
                 transcript_text = " ".join([item['text'] for item in transcript_data])
-            except (RequestBlocked, IpBlocked):
-                logger.warning(
-                    f"YouTube blocked cloud IP for video {video_id}. Using intelligent fallback transcript."
-                )
-                transcript_text = FALLBACK_DEMO_TRANSCRIPT
-                fallback_used = True
             except Exception as e:
-                # Try alternative list method if fetch fails
+                logger.info("Direct transcript fetch failed (%s), attempting subtitle list fallback...", e)
                 try:
                     transcript_list = ytt_api.list(video_id)
                     try:
@@ -204,18 +254,24 @@ async def process_video(request: VideoRequest):
                         transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
                     transcript_data = transcript.fetch()
                     transcript_text = " ".join([item['text'] for item in transcript_data])
-                except (RequestBlocked, IpBlocked):
-                    logger.warning(
-                        f"YouTube blocked cloud IP (alt) for video {video_id}. Using intelligent fallback transcript."
-                    )
-                    transcript_text = FALLBACK_DEMO_TRANSCRIPT
-                    fallback_used = True
                 except Exception as e2:
-                    logger.warning(
-                        f"Transcript fetch failed ({e}, {e2}). Using intelligent fallback transcript."
-                    )
-                    transcript_text = FALLBACK_DEMO_TRANSCRIPT
-                    fallback_used = True
+                    logger.info("Subtitle list fallback failed (%s)", e2)
+
+            # 2. If subtitle scraping was blocked or failed, try Groq Whisper audio pipeline
+            if not transcript_text.strip():
+                logger.info("Attempting Groq Whisper audio pipeline for %s...", request.video_url)
+                whisper_text = transcribe_with_groq_whisper(request.video_url)
+                if whisper_text and whisper_text.strip():
+                    transcript_text = whisper_text.strip()
+                    logger.info("Successfully transcribed video using Groq Whisper!")
+
+            # 3. If both failed, use intelligent fallback demo transcript as safety net
+            if not transcript_text.strip():
+                logger.warning(
+                    "YouTube blocked cloud IP and no valid cookies provided. Using fallback demo transcript."
+                )
+                transcript_text = FALLBACK_DEMO_TRANSCRIPT
+                fallback_used = True
 
         if not transcript_text.strip():
             raise HTTPException(status_code=400, detail="Transcript is empty")
@@ -393,11 +449,17 @@ async def delete_video(video_id: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    cookies_active = bool(
+        YOUTUBE_COOKIES_PATH
+        and os.path.isfile(YOUTUBE_COOKIES_PATH)
+        and os.path.getsize(YOUTUBE_COOKIES_PATH) > 0
+    )
     return {
         "status": "healthy",
         "qdrant": "connected",
         "embedding_model": "loaded",
         "youtube_proxy_configured": bool(YOUTUBE_PROXY),
+        "youtube_cookies_configured": cookies_active,
     }
 
 if __name__ == "__main__":

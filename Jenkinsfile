@@ -23,7 +23,7 @@ pipeline {
         )
         string(
             name: 'EC2_HOST',
-            defaultValue: '3.218.152.162',
+            defaultValue: '34.201.35.177',
             description: 'Target EC2 Public IP address (provisioned by Terraform in infra/)'
         )
         string(

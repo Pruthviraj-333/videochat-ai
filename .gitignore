@@ -44,3 +44,11 @@ infra/.terraform.lock.hcl
 .env.staging
 
 .current_version
+
+# Authentication cookies
+cookies.txt
+*.cookies.txt
+cookies/*.txt
+Backend/cookies.txt
+test_whisper.py
+test_live_ec2.py

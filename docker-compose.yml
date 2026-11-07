@@ -68,6 +68,11 @@ services:
       - CORS_ORIGINS=http://localhost:80,http://localhost:3000,http://localhost:5173
       # YouTube proxy (optional residential proxy to bypass YouTube cloud IP block on AWS/GCP)
       - YOUTUBE_PROXY=${YOUTUBE_PROXY:-}
+      # Path to YouTube session cookies for cloud IP bypass
+      - YOUTUBE_COOKIES_PATH=/app/cookies/cookies.txt
+
+    volumes:
+      - ./cookies:/app/cookies:ro
 
     depends_on:
       qdrant:
