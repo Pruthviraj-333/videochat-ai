@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
@@ -173,7 +173,7 @@ def transcribe_with_groq_whisper(video_url: str) -> Optional[str]:
         return None
 
 def extract_video_id(url: str) -> str:
-    """Extract YouTube video ID from URL"""
+    """Extract YouTube video ID or custom session identifier from URL"""
     patterns = [
         r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([^\&\n?#]+)',
     ]
@@ -181,6 +181,15 @@ def extract_video_id(url: str) -> str:
         match = re.search(pattern, url)
         if match:
             return match.group(1)
+
+    # If it is an external URL but not a YouTube URL, raise ValueError
+    if url.startswith("http://") or url.startswith("https://") or "://" in url:
+        raise ValueError("Invalid YouTube URL")
+
+    # If it is a custom alphanumeric session tag (e.g. "audio_12345678" or "custom_doc")
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", url):
+        return url
+
     raise ValueError("Invalid YouTube URL")
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 100) -> List[dict]:
@@ -222,7 +231,7 @@ async def root():
 async def process_video(request: VideoRequest):
     """
     Process a YouTube video:
-    1. Extract transcript (via YouTube API or Groq Whisper audio pipeline with cookie auth)
+    1. Extract transcript (via user paste, YouTube API, or Groq Whisper audio pipeline)
     2. Fall back to demo transcript if cloud IP blocked and no cookies configured
     3. Chunk the text
     4. Generate embeddings
@@ -343,6 +352,106 @@ async def process_video(request: VideoRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+@app.post("/process-audio")
+async def process_audio(
+    file: UploadFile = File(...),
+    video_url: Optional[str] = Form(None)
+):
+    """
+    Transcribe uploaded audio file using Groq Whisper API and index chunks into Qdrant.
+    """
+    try:
+        import tempfile
+
+        if video_url:
+            try:
+                video_id = extract_video_id(video_url)
+            except Exception:
+                video_id = f"audio_{uuid.uuid4().hex[:8]}"
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+        else:
+            video_id = f"audio_{uuid.uuid4().hex[:8]}"
+            video_url = f"https://www.youtube.com/watch?v={video_id}"
+
+        suffix = os.path.splitext(file.filename or "")[1] or ".m4a"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp_path = tmp.name
+            content = await file.read()
+            tmp.write(content)
+
+        try:
+            logger.info("Transcribing audio file (%d bytes) with Groq Whisper...", len(content))
+            with open(tmp_path, "rb") as audio_file:
+                transcription = groq_client.audio.transcriptions.create(
+                    model="whisper-large-v3",
+                    file=audio_file,
+                    response_format="text",
+                )
+            transcript_text = str(transcription).strip()
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+        if not transcript_text:
+            raise HTTPException(status_code=400, detail="Whisper transcription produced empty text.")
+
+        chunks = chunk_text(transcript_text)
+        if not chunks:
+            raise HTTPException(status_code=400, detail="Failed to create chunks from transcript")
+
+        chunk_texts = [chunk["text"] for chunk in chunks]
+        embeddings = list(embedding_model.embed(chunk_texts))
+
+        try:
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            qdrant_client.delete(
+                collection_name=COLLECTION_NAME,
+                points_selector=Filter(
+                    must=[
+                        FieldCondition(
+                            key="video_id",
+                            match=MatchValue(value=video_id)
+                        )
+                    ]
+                )
+            )
+        except Exception:
+            pass
+
+        points = []
+        for idx, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            point = PointStruct(
+                id=str(uuid.uuid4()),
+                vector=embedding.tolist(),
+                payload={
+                    "video_id": video_id,
+                    "text": chunk["text"],
+                    "chunk_index": idx,
+                    "video_url": video_url,
+                }
+            )
+            points.append(point)
+
+        qdrant_client.upsert(
+            collection_name=COLLECTION_NAME,
+            points=points
+        )
+
+        return {
+            "message": "Audio successfully transcribed with Groq Whisper and indexed!",
+            "video_id": video_id,
+            "video_url": video_url,
+            "chunks_created": len(chunks),
+            "transcript_length": len(transcript_text),
+            "transcript_preview": transcript_text[:300] + "..." if len(transcript_text) > 300 else transcript_text,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Audio processing failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Audio processing error: {e}")
 
 @app.post("/ask", response_model=AnswerResponse)
 async def ask_question(request: QuestionRequest):

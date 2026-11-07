@@ -3,6 +3,7 @@ fastembed==0.7.4
 groq==1.0.0
 pydantic==2.12.5
 python-dotenv==1.2.1
+python-multipart==0.0.20
 qdrant_client==1.16.2
 uvicorn==0.40.0
 youtube_transcript_api==1.2.3

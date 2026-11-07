@@ -129,6 +129,29 @@ def test_process_video_success_mocked(mock_qdrant, mock_get_ytt):
     assert mock_qdrant.upsert.called
 
 
+@patch("main.qdrant_client")
+def test_process_video_with_custom_transcript(mock_qdrant):
+    """Verify that user-provided custom transcript is indexed directly without hitting YouTube."""
+    mock_qdrant.delete.return_value = None
+    mock_qdrant.upsert.return_value = None
+
+    custom_text = "This is a custom pasted transcript about Kubernetes, Helm charts, and microservices architecture."
+    response = client.post(
+        "/process-video",
+        json={
+            "video_url": "https://www.youtube.com/watch?v=custom_video_123",
+            "transcript": custom_text
+        }
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["message"] == "Video processed successfully"
+    assert data["chunks_created"] >= 1
+    assert data["fallback_used"] is False
+    assert mock_qdrant.upsert.called
+
+
 @patch("main.get_ytt_client")
 @patch("main.qdrant_client")
 def test_process_video_ip_blocked_fallback(mock_qdrant, mock_get_ytt):

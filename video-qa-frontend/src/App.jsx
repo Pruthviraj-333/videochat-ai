@@ -1,8 +1,25 @@
 import { useState, useRef, useEffect } from 'react';
-import { Search, Youtube, MessageSquare, Loader2, CheckCircle, AlertCircle, Sparkles, Send, Trash2, Play } from 'lucide-react';
+import { 
+  Youtube, 
+  MessageSquare, 
+  Loader2, 
+  CheckCircle, 
+  AlertCircle, 
+  Sparkles, 
+  Send, 
+  Trash2, 
+  Play, 
+  FileText, 
+  Mic, 
+  UploadCloud, 
+  FileAudio 
+} from 'lucide-react';
 
 function App() {
+  const [activeTab, setActiveTab] = useState('url'); // 'url' | 'paste' | 'audio'
   const [videoUrl, setVideoUrl] = useState('');
+  const [customTranscript, setCustomTranscript] = useState('');
+  const [audioFile, setAudioFile] = useState(null);
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
   const [loading, setLoading] = useState(false);
@@ -14,6 +31,7 @@ function App() {
   const [showSuccess, setShowSuccess] = useState(false);
   const conversationEndRef = useRef(null);
   const questionInputRef = useRef(null);
+  const fileInputRef = useRef(null);
 
   // VITE_API_URL: set explicitly for raw local dev (e.g. http://localhost:8000).
   // In Docker, Nginx proxies /api -> backend so we use a relative path as default.
@@ -33,14 +51,68 @@ function App() {
 
   const extractVideoId = (url) => {
     const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-    const match = url.match(regex);
+    const match = url?.match(regex);
     return match ? match[1] : null;
   };
 
-  const processVideo = async () => {
-    const id = extractVideoId(videoUrl);
-    if (!id) {
-      setError('Invalid YouTube URL');
+  const processVideoOrTranscript = async () => {
+    if (activeTab === 'url' && !videoUrl.trim()) {
+      setError('Please enter a YouTube video URL');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+
+    if (activeTab === 'paste' && !customTranscript.trim()) {
+      setError('Please paste a transcript to index');
+      setTimeout(() => setError(''), 3000);
+      return;
+    }
+
+    const effectiveUrl = videoUrl.trim() || `https://www.youtube.com/watch?v=custom_${Math.random().toString(36).substring(2, 9)}`;
+    const id = extractVideoId(effectiveUrl) || 'custom_doc';
+
+    setProcessing(true);
+    setError('');
+    setVideoProcessed(false);
+    setShowSuccess(false);
+
+    try {
+      const payload = { video_url: effectiveUrl };
+      if (customTranscript.trim()) {
+        payload.transcript = customTranscript.trim();
+      }
+
+      const response = await fetch(`${API_BASE}/process-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await response.json();
+
+      if (response.ok) {
+        setVideoProcessed(true);
+        setVideoUrl(effectiveUrl);
+        setVideoId(id);
+        setConversationHistory([]);
+        setAnswer('');
+        setShowSuccess(true);
+        setTimeout(() => setShowSuccess(false), 3000);
+      } else {
+        setError(data.detail || 'Failed to process video/transcript');
+        setTimeout(() => setError(''), 5000);
+      }
+    } catch (err) {
+      setError('Failed to connect to server. Make sure the backend is running.');
+      setTimeout(() => setError(''), 5000);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const processAudio = async () => {
+    if (!audioFile) {
+      setError('Please select an audio file (.mp3, .m4a, .wav) to transcribe');
       setTimeout(() => setError(''), 3000);
       return;
     }
@@ -51,27 +123,33 @@ function App() {
     setShowSuccess(false);
 
     try {
-      const response = await fetch(`${API_BASE}/process-video`, {
+      const formData = new FormData();
+      formData.append('file', audioFile);
+      if (videoUrl.trim()) {
+        formData.append('video_url', videoUrl.trim());
+      }
+
+      const response = await fetch(`${API_BASE}/process-audio`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ video_url: videoUrl })
+        body: formData,
       });
 
       const data = await response.json();
 
       if (response.ok) {
         setVideoProcessed(true);
-        setVideoId(id);
+        setVideoUrl(data.video_url || 'https://www.youtube.com/watch?v=' + data.video_id);
+        setVideoId(data.video_id);
         setConversationHistory([]);
         setAnswer('');
         setShowSuccess(true);
         setTimeout(() => setShowSuccess(false), 3000);
       } else {
-        setError(data.detail || 'Failed to process video');
+        setError(data.detail || 'Failed to transcribe audio with Groq Whisper');
         setTimeout(() => setError(''), 5000);
       }
     } catch (err) {
-      setError('Failed to connect to server. Make sure the backend is running on port 8000.');
+      setError('Failed to connect to server');
       setTimeout(() => setError(''), 5000);
     } finally {
       setProcessing(false);
@@ -84,7 +162,6 @@ function App() {
     const currentQuestion = question;
     setQuestion('');
     
-    // Reset textarea height after clearing
     if (questionInputRef.current) {
       questionInputRef.current.style.height = '56px';
     }
@@ -92,7 +169,6 @@ function App() {
     setLoading(true);
     setError('');
 
-    // Add user question immediately for better UX
     const tempEntry = {
       question: currentQuestion,
       answer: null,
@@ -144,18 +220,21 @@ function App() {
 
   const resetAll = () => {
     setVideoUrl('');
+    setCustomTranscript('');
+    setAudioFile(null);
     setQuestion('');
     setAnswer('');
     setVideoProcessed(false);
     setVideoId('');
     setConversationHistory([]);
     setError('');
+    setActiveTab('url');
   };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50">
-      {/* Fixed background overlay to extend beyond content */}
       <div className="fixed inset-0 bg-gradient-to-br from-blue-50 via-cyan-50 to-teal-50 -z-10"></div>
+      
       {/* Header */}
       <div className="bg-white shadow-sm border-b border-cyan-100">
         <div className="max-w-[1600px] mx-auto px-4 py-4">
@@ -169,7 +248,7 @@ function App() {
                   VideoChat AI
                 </h1>
                 <p className="text-cyan-600 text-xs font-medium">
-                  Intelligent Video Q&A Assistant
+                  RAG Video Q&A with FastEmbed, Qdrant & Groq LLM
                 </p>
               </div>
             </div>
@@ -186,104 +265,238 @@ function App() {
         </div>
       </div>
 
-      {/* Main Content - Split Layout */}
+      {/* Main Content */}
       <div className="max-w-[1600px] mx-auto px-4 py-6 min-h-[calc(100vh-88px)]">
         <div className="grid grid-cols-1 lg:grid-cols-7 gap-4 min-h-full">
           
           {/* Left Panel - Input Section */}
           <div className="lg:col-span-2 space-y-4 flex flex-col min-h-[calc(100vh-120px)]">
             
-            {/* Video Input */}
+            {/* Input Card */}
             <div className="bg-white rounded-2xl shadow-md p-6 border border-cyan-100">
-              <div className="flex items-center gap-3 mb-5">
+              <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-100 to-blue-100 flex items-center justify-center">
                   <Youtube className="w-5 h-5 text-cyan-600" />
                 </div>
                 <div>
-                  <h2 className="text-lg font-bold text-gray-800">Video Source</h2>
-                  <p className="text-xs text-gray-500">Paste YouTube URL to begin</p>
+                  <h2 className="text-lg font-bold text-gray-800">Content Source</h2>
+                  <p className="text-xs text-gray-500">Choose ingestion method</p>
                 </div>
               </div>
-              
-              <div className="space-y-3">
-                <div className="relative">
+
+              {/* Source Tabs */}
+              <div className="grid grid-cols-3 gap-1 bg-gray-100 p-1 rounded-xl mb-4 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('url')}
+                  className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1 ${
+                    activeTab === 'url' ? 'bg-white text-cyan-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <Youtube className="w-3.5 h-3.5" />
+                  YouTube
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('paste')}
+                  className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1 ${
+                    activeTab === 'paste' ? 'bg-white text-cyan-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <FileText className="w-3.5 h-3.5" />
+                  Paste Text
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('audio')}
+                  className={`py-2 rounded-lg transition-all flex items-center justify-center gap-1 ${
+                    activeTab === 'audio' ? 'bg-white text-cyan-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <Mic className="w-3.5 h-3.5" />
+                  Audio
+                </button>
+              </div>
+
+              {/* Tab 1: YouTube URL */}
+              {activeTab === 'url' && (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={videoUrl}
+                      onChange={(e) => setVideoUrl(e.target.value)}
+                      onKeyPress={(e) => e.key === 'Enter' && !processing && videoUrl && processVideoOrTranscript()}
+                      placeholder="https://www.youtube.com/watch?v=..."
+                      className="w-full px-4 py-3 pr-12 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-cyan-400 focus:bg-white focus:outline-none transition-all text-gray-700 placeholder-gray-400 text-sm"
+                      disabled={processing}
+                    />
+                    {videoProcessed && (
+                      <CheckCircle className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />
+                    )}
+                  </div>
+
+                  <button
+                    onClick={processVideoOrTranscript}
+                    disabled={processing || !videoUrl.trim()}
+                    className="w-full px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-xl font-semibold hover:from-cyan-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    {processing ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Fetching & Indexing...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-5 h-5" />
+                        Process Video
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Tab 2: Paste Transcript */}
+              {activeTab === 'paste' && (
+                <div className="space-y-3">
                   <input
                     type="text"
                     value={videoUrl}
                     onChange={(e) => setVideoUrl(e.target.value)}
-                    onKeyPress={(e) => e.key === 'Enter' && !processing && videoUrl && processVideo()}
-                    placeholder="https://www.youtube.com/watch?v=..."
-                    className="w-full px-4 py-3 pr-12 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-cyan-400 focus:bg-white focus:outline-none transition-all text-gray-700 placeholder-gray-400"
+                    placeholder="Optional YouTube URL or Title..."
+                    className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-xs text-gray-700 placeholder-gray-400 focus:outline-none focus:border-cyan-400"
                     disabled={processing}
                   />
-                  {videoProcessed && (
-                    <CheckCircle className="absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-green-500" />
-                  )}
+
+                  <textarea
+                    rows={6}
+                    value={customTranscript}
+                    onChange={(e) => setCustomTranscript(e.target.value)}
+                    placeholder="Paste real video transcript or article text here..."
+                    className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-cyan-400 focus:bg-white focus:outline-none transition-all text-gray-700 placeholder-gray-400 text-sm resize-none"
+                    disabled={processing}
+                  />
+
+                  <button
+                    onClick={processVideoOrTranscript}
+                    disabled={processing || !customTranscript.trim()}
+                    className="w-full px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-xl font-semibold hover:from-cyan-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    {processing ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Embedding into Qdrant...
+                      </>
+                    ) : (
+                      <>
+                        <FileText className="w-5 h-5" />
+                        Index Transcript
+                      </>
+                    )}
+                  </button>
                 </div>
-                
-                {videoId && (
-                  <div className="relative rounded-xl overflow-hidden bg-gray-100 aspect-video">
-                    <img 
-                      src={`https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`}
-                      alt="Video thumbnail"
-                      className="w-full h-full object-cover"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-4">
-                      <div className="flex items-center gap-2 text-white text-sm">
-                        <Play className="w-4 h-4" />
-                        <span>Video loaded</span>
-                      </div>
+              )}
+
+              {/* Tab 3: Upload Audio (Groq Whisper) */}
+              {activeTab === 'audio' && (
+                <div className="space-y-3">
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac"
+                    className="hidden"
+                    onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
+                  />
+
+                  <div
+                    onClick={() => fileInputRef.current?.click()}
+                    className="border-2 border-dashed border-cyan-200 hover:border-cyan-400 rounded-xl p-5 text-center cursor-pointer transition-colors bg-cyan-50/30 flex flex-col items-center justify-center gap-2"
+                  >
+                    <UploadCloud className="w-8 h-8 text-cyan-500" />
+                    <div>
+                      <p className="text-sm font-semibold text-gray-700">
+                        {audioFile ? audioFile.name : 'Click to select audio file'}
+                      </p>
+                      <p className="text-xs text-gray-400">MP3, M4A, WAV up to 25MB</p>
                     </div>
                   </div>
-                )}
-                
-                <button
-                  onClick={processVideo}
-                  disabled={processing || !videoUrl}
-                  className="w-full px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-xl font-semibold hover:from-cyan-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
-                >
-                  {processing ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      Analyzing Video...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-5 h-5" />
-                      Process Video
-                    </>
+
+                  {audioFile && (
+                    <div className="flex items-center gap-2 text-xs text-cyan-800 bg-cyan-50 p-2.5 rounded-lg border border-cyan-200">
+                      <FileAudio className="w-4 h-4 text-cyan-600 flex-shrink-0" />
+                      <span className="truncate">{audioFile.name}</span>
+                      <span className="ml-auto font-medium text-gray-500">
+                        {(audioFile.size / (1024 * 1024)).toFixed(1)} MB
+                      </span>
+                    </div>
                   )}
-                </button>
-              </div>
+
+                  <button
+                    onClick={processAudio}
+                    disabled={processing || !audioFile}
+                    className="w-full px-6 py-3 bg-gradient-to-r from-cyan-600 to-blue-600 text-white rounded-xl font-semibold hover:from-cyan-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+                  >
+                    {processing ? (
+                      <>
+                        <Loader2 className="w-5 h-5 animate-spin" />
+                        Transcribing with Whisper...
+                      </>
+                    ) : (
+                      <>
+                        <Mic className="w-5 h-5" />
+                        Transcribe & Index
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Video Thumbnail (if YouTube ID is present) */}
+              {videoId && videoId.length === 11 && (
+                <div className="mt-4 relative rounded-xl overflow-hidden bg-gray-100 aspect-video">
+                  <img 
+                    src={`https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`}
+                    alt="Video thumbnail"
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent flex items-end p-4">
+                    <div className="flex items-center gap-2 text-white text-sm">
+                      <Play className="w-4 h-4" />
+                      <span>Video loaded</span>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {showSuccess && (
                 <div className="mt-4 p-3 bg-green-50 border-2 border-green-200 rounded-xl flex items-center gap-3 animate-fadeIn">
-                  <CheckCircle className="w-5 h-5 text-green-600" />
-                  <span className="text-green-700 text-sm font-semibold">Ready to answer questions!</span>
+                  <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0" />
+                  <span className="text-green-700 text-sm font-semibold">
+                    Indexed! Ready to answer questions.
+                  </span>
                 </div>
               )}
             </div>
 
-
-            {/* Info Card */}
+            {/* Quick Start Guide */}
             {!videoProcessed && !processing && (
               <div className="bg-gradient-to-br from-cyan-50 to-blue-50 rounded-2xl p-6 border-2 border-cyan-200 border-dashed">
                 <h3 className="text-base font-bold text-cyan-900 mb-3 flex items-center gap-2">
                   <Sparkles className="w-5 h-5" />
-                  Quick Start Guide
+                  Ingestion Options
                 </h3>
                 <div className="space-y-3 text-sm text-cyan-700">
                   <div className="flex items-start gap-3">
                     <div className="w-6 h-6 rounded-full bg-cyan-200 flex items-center justify-center flex-shrink-0 font-bold text-cyan-900">1</div>
-                    <p>Paste any YouTube video URL above</p>
+                    <p><b>YouTube:</b> Direct link ingestion</p>
                   </div>
                   <div className="flex items-start gap-3">
                     <div className="w-6 h-6 rounded-full bg-cyan-200 flex items-center justify-center flex-shrink-0 font-bold text-cyan-900">2</div>
-                    <p>Wait for AI to analyze the transcript</p>
+                    <p><b>Paste Text:</b> Copy transcript directly (bypasses cloud IP bans)</p>
                   </div>
                   <div className="flex items-start gap-3">
                     <div className="w-6 h-6 rounded-full bg-cyan-200 flex items-center justify-center flex-shrink-0 font-bold text-cyan-900">3</div>
-                    <p>Ask questions and get instant answers</p>
+                    <p><b>Upload Audio:</b> Transcribe speech using Groq Whisper API</p>
                   </div>
                 </div>
               </div>
@@ -332,7 +545,7 @@ function App() {
                     <p className="text-gray-500 max-w-sm">
                       {videoProcessed 
                         ? "Ask your first question about the video to begin" 
-                        : "Process a YouTube video to start asking questions"}
+                        : "Ingest a YouTube video, paste transcript, or upload audio"}
                     </p>
                   </div>
                 ) : (
@@ -358,7 +571,7 @@ function App() {
                             {item.loading ? (
                               <div className="flex items-center gap-2 text-cyan-600">
                                 <Loader2 className="w-4 h-4 animate-spin" />
-                                <span className="text-sm">Analyzing video content...</span>
+                                <span className="text-sm">Retrieving vectors & synthesizing answer...</span>
                               </div>
                             ) : (
                               <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{item.answer}</p>
@@ -382,7 +595,6 @@ function App() {
                     value={question}
                     onChange={(e) => {
                       setQuestion(e.target.value);
-                      // Auto-resize textarea
                       e.target.style.height = 'auto';
                       e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
                     }}
@@ -392,7 +604,7 @@ function App() {
                         askQuestion();
                       }
                     }}
-                    placeholder="Ask a question about the video..."
+                    placeholder="Ask a question about the video content..."
                     className="flex-1 px-4 py-3 bg-gray-50 border-2 border-gray-200 rounded-xl focus:border-blue-400 focus:bg-white focus:outline-none transition-all text-gray-700 placeholder-gray-400 resize-none min-h-[56px] max-h-[200px]"
                     disabled={loading}
                     style={{ height: '56px' }}
