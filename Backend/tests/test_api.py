@@ -153,31 +153,27 @@ def test_process_video_with_custom_transcript(mock_qdrant):
 
 
 @patch("main.get_ytt_client")
-@patch("main.qdrant_client")
-def test_process_video_ip_blocked_fallback(mock_qdrant, mock_get_ytt):
+def test_process_video_ip_blocked_fallback(mock_get_ytt):
     """
-    Test /process-video automatically falls back to the demo transcript
-    when YouTube blocks requests from cloud provider IPs, keeping RAG operational.
+    Test /process-video returns a user-friendly error prompting the user
+    to use other content sources (Paste Text or Audio Upload) when YouTube fails.
     """
     from youtube_transcript_api._errors import IpBlocked
     mock_ytt_instance = MagicMock()
     mock_ytt_instance.fetch.side_effect = IpBlocked("qAF1NjEVHhY")
     mock_ytt_instance.list.side_effect = IpBlocked("qAF1NjEVHhY")
     mock_get_ytt.return_value = mock_ytt_instance
-    mock_qdrant.delete.return_value = None
-    mock_qdrant.upsert.return_value = None
 
     response = client.post(
         "/process-video",
         json={"video_url": "https://www.youtube.com/watch?v=qAF1NjEVHhY"}
     )
 
-    assert response.status_code == 200
-    data = response.json()
-    assert data["fallback_used"] is True
-    assert data["chunks_created"] >= 1
-    assert data["video_id"] == "qAF1NjEVHhY"
-    assert mock_qdrant.upsert.called
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert "Unable to fetch transcript from YouTube directly" in detail
+    assert "Paste Text" in detail
+    assert "Audio" in detail
 
 
 @patch("main.groq_client")

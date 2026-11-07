@@ -353,6 +353,33 @@ function App() {
                       </>
                     )}
                   </button>
+
+                  {error && (
+                    <div className="mt-3 p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex flex-col gap-2.5 animate-fadeIn">
+                      <div className="flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
+                        <span className="leading-relaxed font-medium">{error}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => { setActiveTab('paste'); setError(''); }}
+                          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-semibold text-xs transition-colors flex items-center gap-1 shadow-sm"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                          Switch to Paste Text
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setActiveTab('audio'); setError(''); }}
+                          className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg font-semibold text-xs transition-colors flex items-center gap-1 shadow-sm"
+                        >
+                          <Mic className="w-3.5 h-3.5" />
+                          Switch to Audio Upload
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

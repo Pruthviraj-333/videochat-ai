@@ -274,13 +274,15 @@ async def process_video(request: VideoRequest):
                     transcript_text = whisper_text.strip()
                     logger.info("Successfully transcribed video using Groq Whisper!")
 
-            # 3. If both failed, use intelligent fallback demo transcript as safety net
+            # 3. If both failed, return user-friendly message prompting other content sources
             if not transcript_text.strip():
-                logger.warning(
-                    "YouTube blocked cloud IP and no valid cookies provided. Using fallback demo transcript."
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Unable to fetch transcript from YouTube directly (cloud server IP block or video lacks subtitles). "
+                        "Please switch to the 'Paste Text' tab to paste the transcript directly, or the 'Audio' tab to upload audio."
+                    ),
                 )
-                transcript_text = FALLBACK_DEMO_TRANSCRIPT
-                fallback_used = True
 
         if not transcript_text.strip():
             raise HTTPException(status_code=400, detail="Transcript is empty")
