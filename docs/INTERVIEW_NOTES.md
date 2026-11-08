@@ -92,7 +92,7 @@ This document provides technical rationales, architectural design trade-offs, an
   * NAT Gateways are **NOT eligible for the AWS Free Tier**.
   * An Application Load Balancer adds another **~$18/month**.
 * **The Architectural Decision:** To achieve a **strictly $0/month bill**, we placed the single instance in a public subnet but hardened it using defense-in-depth:
-  1. **Strict Ingress Rules:** Only Port 80 (HTTP) is public. Port 22 (SSH) is locked down strictly to the developer workstation IP (`var.my_ip`).
+  1. **Strict Ingress Rules:** Only Port 80 (HTTP) and Port 443 (HTTPS) are public. Port 22 (SSH) is locked down strictly to the developer workstation IP (`var.my_ip`) or managed passwordlessly via AWS SSM.
   2. **Internal Docker Network Isolation:** Qdrant (`6333`) and FastAPI (`8000`) ports are **never mapped to host network interfaces**. They communicate solely on Docker's private bridge network, accessible only via Nginx reverse proxy.
   3. **AWS Systems Manager (SSM):** We provisioned the EC2 IAM role with `AmazonSSMManagedInstanceCore`. Developers can delete Port 22 entirely and manage the instance passwordlessly via the AWS SSM console or AWS CLI (`aws ssm start-session`).
 
@@ -188,6 +188,23 @@ This document provides technical rationales, architectural design trade-offs, an
   1. **AWS Security Group Ingress:** Authorized TCP Port 443 (`0.0.0.0/0`) on `production-videochat-sg`.
   2. **SSL Termination at Nginx:** Configured Nginx inside `videochat-frontend` to listen on both Port 80 and Port 443 with self-signed TLS certificates and strong ciphers.
   3. **Wildcard DNS Support:** Added support for `100.53.110.63.nip.io`, allowing iOS devices with iCloud Private Relay (which blocks bare IP addresses) and mobile cellular carriers with strict NAT64 gateways to route smoothly.
+
+---
+
+## 13. Observability & Alarm Sizing: Why 80% CPU Over Two 5-Minute Periods?
+
+### Question: Why did you configure the CloudWatch CPU alarm at > 80% for two 5-minute evaluation periods (10 minutes total) instead of 1 minute?
+
+#### Rationale & Technical Defense:
+* **The Workload Characteristic:**
+  * When a user ingests a long video transcript, FastEmbed computes ONNX vector embeddings locally on the CPU.
+  * During vector math, CPU utilization briefly spikes to **80%–95% for 3 to 8 seconds**, then instantly drops back down to ~1%–3% idle.
+* **The Trade-Off (Alert Fatigue vs. Genuine Incident Detection):**
+  * **If set to 1-minute window:** Every normal video ingestion burst would trigger a false-positive alarm, causing severe alert fatigue and waking up on-call engineers for expected, healthy operational behavior.
+  * **With two 5-minute evaluation windows (10 minutes sustained):** Normal indexing bursts are filtered out completely. The alarm transitions to `ALARM` state **only** if CPU is pinned above 80% continuously for 10 minutes, accurately catching real incidents like runaway worker threads, DDoS spikes, or sustained high traffic.
+* **EC2 Burstable Credits (`t3.micro`):**
+  * `t3.micro` has a 20% baseline CPU entitlement. Short spikes consume burst credits harmlessly.
+  * Sustained CPU > 80% for 10 minutes exhausts CPU credits, making the 10-minute threshold the exact inflection point where SRE intervention, horizontal scaling, or instance upgrading is genuinely needed.
 
 ---
 
