@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-import http.cookiejar
 import re
 import requests
 from requests.adapters import HTTPAdapter
@@ -40,12 +39,10 @@ app.add_middleware(
 )
 
 # ---------------------------------------------------------------------------
-# YouTube proxy & cookies support
+# YouTube proxy support
 # Format YOUTUBE_PROXY: http://user:password@proxy-host:port
-# Format YOUTUBE_COOKIES_PATH: /app/cookies/cookies.txt (Netscape cookie file)
 # ---------------------------------------------------------------------------
 YOUTUBE_PROXY = os.environ.get("YOUTUBE_PROXY")
-YOUTUBE_COOKIES_PATH = os.environ.get("YOUTUBE_COOKIES_PATH", "/app/cookies/cookies.txt")
 
 # ---------------------------------------------------------------------------
 # Public Invidious API instances (Free rotating proxy pool for YouTube transcripts)
@@ -95,7 +92,7 @@ class AnswerResponse(BaseModel):
 
 # Helper functions
 def get_ytt_client() -> YouTubeTranscriptApi:
-    """Initialize YouTubeTranscriptApi with browser headers, retry adapter, optional proxy, and cookies."""
+    """Initialize YouTubeTranscriptApi with browser headers, retry adapter, and optional proxy."""
     session = requests.Session()
     retries = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
     session.mount("https://", HTTPAdapter(max_retries=retries))
@@ -105,19 +102,6 @@ def get_ytt_client() -> YouTubeTranscriptApi:
     })
     if YOUTUBE_PROXY:
         session.proxies = {"http": YOUTUBE_PROXY, "https": YOUTUBE_PROXY}
-
-    if (
-        YOUTUBE_COOKIES_PATH
-        and os.path.isfile(YOUTUBE_COOKIES_PATH)
-        and os.path.getsize(YOUTUBE_COOKIES_PATH) > 0
-    ):
-        try:
-            cookie_jar = http.cookiejar.MozillaCookieJar(YOUTUBE_COOKIES_PATH)
-            cookie_jar.load(ignore_discard=True, ignore_expires=True)
-            session.cookies = cookie_jar
-            logger.info("Loaded YouTube authentication cookies from %s", YOUTUBE_COOKIES_PATH)
-        except Exception as e:
-            logger.warning("Failed to parse cookies from %s: %s", YOUTUBE_COOKIES_PATH, e)
 
     return YouTubeTranscriptApi(http_client=session)
 
@@ -184,7 +168,7 @@ def fetch_transcript_from_invidious(video_id: str) -> Optional[str]:
     return None
 
 def transcribe_with_groq_whisper(video_url: str) -> Optional[str]:
-    """Download audio stream via yt-dlp (with cookies if available) and transcribe via Groq Whisper API."""
+    """Download audio stream via yt-dlp and transcribe via Groq Whisper API."""
     try:
         import tempfile
         import yt_dlp
@@ -197,12 +181,6 @@ def transcribe_with_groq_whisper(video_url: str) -> Optional[str]:
                 "quiet": True,
                 "noplaylist": True,
             }
-            if (
-                YOUTUBE_COOKIES_PATH
-                and os.path.isfile(YOUTUBE_COOKIES_PATH)
-                and os.path.getsize(YOUTUBE_COOKIES_PATH) > 0
-            ):
-                ydl_opts["cookiefile"] = YOUTUBE_COOKIES_PATH
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(video_url, download=True)
@@ -296,7 +274,7 @@ async def process_video(request: VideoRequest):
             transcript_text = request.transcript.strip()
             source_mode = "user_pasted"
         else:
-            # 1. Try primary method: YouTubeTranscriptApi (fastest, uses cookies if configured)
+            # 1. Try primary method: YouTubeTranscriptApi (fastest direct retrieval)
             transcript_text = ""
             try:
                 ytt_api = get_ytt_client()
@@ -400,7 +378,6 @@ async def process_video(request: VideoRequest):
             "video_id": video_id,
             "chunks_created": len(chunks),
             "transcript_length": len(transcript_text),
-            "fallback_used": False,
         }
 
     except ValueError as e:
@@ -615,17 +592,11 @@ async def delete_video(video_id: str):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    cookies_active = bool(
-        YOUTUBE_COOKIES_PATH
-        and os.path.isfile(YOUTUBE_COOKIES_PATH)
-        and os.path.getsize(YOUTUBE_COOKIES_PATH) > 0
-    )
     return {
         "status": "healthy",
         "qdrant": "connected",
         "embedding_model": "loaded",
         "youtube_proxy_configured": bool(YOUTUBE_PROXY),
-        "youtube_cookies_configured": cookies_active,
     }
 
 if __name__ == "__main__":

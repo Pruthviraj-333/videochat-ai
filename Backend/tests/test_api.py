@@ -148,7 +148,6 @@ def test_process_video_with_custom_transcript(mock_qdrant):
     data = response.json()
     assert data["message"] == "Video processed successfully"
     assert data["chunks_created"] >= 1
-    assert data["fallback_used"] is False
     assert mock_qdrant.upsert.called
 
 
