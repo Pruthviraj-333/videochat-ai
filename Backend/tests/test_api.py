@@ -152,17 +152,52 @@ def test_process_video_with_custom_transcript(mock_qdrant):
     assert mock_qdrant.upsert.called
 
 
+@patch("main.fetch_transcript_from_invidious")
 @patch("main.get_ytt_client")
-def test_process_video_ip_blocked_fallback(mock_get_ytt):
+@patch("main.qdrant_client")
+def test_process_video_invidious_success(mock_qdrant, mock_get_ytt, mock_invidious):
     """
-    Test /process-video returns a user-friendly error prompting the user
-    to use other content sources (Paste Text or Audio Upload) when YouTube fails.
+    Test that when YouTube blocks direct requests, the free Invidious API pool
+    automatically extracts the real transcript and indexes it into Qdrant.
     """
     from youtube_transcript_api._errors import IpBlocked
     mock_ytt_instance = MagicMock()
     mock_ytt_instance.fetch.side_effect = IpBlocked("qAF1NjEVHhY")
     mock_ytt_instance.list.side_effect = IpBlocked("qAF1NjEVHhY")
     mock_get_ytt.return_value = mock_ytt_instance
+
+    mock_invidious.return_value = (
+        "LangChain and LangGraph are open source frameworks designed to build LLM applications. "
+        "LangGraph enables multi-agent state machines with cycles and conditional branching."
+    )
+    mock_qdrant.delete.return_value = None
+    mock_qdrant.upsert.return_value = None
+
+    response = client.post(
+        "/process-video",
+        json={"video_url": "https://www.youtube.com/watch?v=qAF1NjEVHhY"}
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source_mode"] == "free_invidious_api"
+    assert data["chunks_created"] >= 1
+    assert mock_qdrant.upsert.called
+
+
+@patch("main.fetch_transcript_from_invidious")
+@patch("main.get_ytt_client")
+def test_process_video_ip_blocked_fallback(mock_get_ytt, mock_invidious):
+    """
+    Test /process-video returns a user-friendly error prompting the user
+    to use other content sources (Paste Text or Audio Upload) when all automated methods fail.
+    """
+    from youtube_transcript_api._errors import IpBlocked
+    mock_ytt_instance = MagicMock()
+    mock_ytt_instance.fetch.side_effect = IpBlocked("qAF1NjEVHhY")
+    mock_ytt_instance.list.side_effect = IpBlocked("qAF1NjEVHhY")
+    mock_get_ytt.return_value = mock_ytt_instance
+    mock_invidious.return_value = None
 
     response = client.post(
         "/process-video",

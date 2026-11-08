@@ -48,29 +48,17 @@ YOUTUBE_PROXY = os.environ.get("YOUTUBE_PROXY")
 YOUTUBE_COOKIES_PATH = os.environ.get("YOUTUBE_COOKIES_PATH", "/app/cookies/cookies.txt")
 
 # ---------------------------------------------------------------------------
-# Fallback Demo Transcript for Cloud IP Blocks
-# When hosted on AWS/GCP/Azure, YouTube blocks datacenter IP ranges.
-# This rich fallback transcript ensures that the end-to-end RAG pipeline
-# (FastEmbed chunking/embedding -> Qdrant indexing -> Groq LLM Q&A)
-# remains 100% operational for live demos and interviews without requiring a paid proxy.
+# Public Invidious API instances (Free rotating proxy pool for YouTube transcripts)
+# When direct scraping is blocked by cloud provider IPs (AWS, GCP), these
+# open-source instances fetch subtitles and media metadata for free without API keys.
 # ---------------------------------------------------------------------------
-FALLBACK_DEMO_TRANSCRIPT = (
-    "Welcome to VideoChat AI! In this demonstration of modern DevOps, Cloud Architecture, and Artificial "
-    "Intelligence systems, we explore how cutting-edge technologies integrate seamlessly. "
-    "Containerization with Docker packages applications with their libraries, runtime, and configuration "
-    "into lightweight containers, ensuring consistent behavior across local development and cloud production. "
-    "Continuous Integration and Continuous Deployment (CI/CD) pipelines powered by Jenkins automate "
-    "the build, linting with Ruff and Hadolint, pytest test execution, Trivy vulnerability scanning, "
-    "and zero-downtime deployment to AWS EC2. "
-    "Infrastructure as Code (IaC) with HashiCorp Terraform provisions cloud resources reliably, "
-    "including Virtual Private Clouds (VPC), Subnets, Security Groups, and EC2 instances. "
-    "Retrieval-Augmented Generation (RAG) elevates Large Language Models by grounding them with external "
-    "knowledge. In this application, FastEmbed creates dense 384-dimensional vector embeddings with BAAI/bge-small-en-v1.5. "
-    "These embeddings are indexed in the Qdrant vector database using cosine distance. "
-    "When a user asks a question, semantic vector search retrieves the top relevant chunks, which are then "
-    "injected into the Groq LLM prompt. Groq's high-speed inference engine delivers accurate, context-grounded "
-    "answers with sub-second latency."
-)
+INVIDIOUS_INSTANCES = [
+    "https://yt.chocolatemoo53.com",
+    "https://invidious.tiekoetter.com",
+    "https://inv.tux.pizza",
+    "https://invidious.drgns.space",
+    "https://invidious.flokinet.to",
+]
 
 # Initialize components
 embedding_model = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
@@ -132,6 +120,68 @@ def get_ytt_client() -> YouTubeTranscriptApi:
             logger.warning("Failed to parse cookies from %s: %s", YOUTUBE_COOKIES_PATH, e)
 
     return YouTubeTranscriptApi(http_client=session)
+
+def parse_vtt(vtt_text: str) -> str:
+    """Parse WebVTT subtitle text into clean, concatenated speech text."""
+    lines = []
+    for line in vtt_text.splitlines():
+        line = line.strip()
+        if (
+            not line
+            or "-->" in line
+            or line.startswith("WEBVTT")
+            or line.startswith("Kind:")
+            or line.startswith("Language:")
+        ):
+            continue
+        clean = re.sub(r"<[^>]+>", "", line).strip()
+        if clean:
+            lines.append(clean)
+    return " ".join(lines)
+
+def fetch_transcript_from_invidious(video_id: str) -> Optional[str]:
+    """
+    Fetch real transcript from public Invidious API instances.
+    This acts as a free, rotating proxy that bypasses AWS/GCP datacenter IP blocks.
+    """
+    for base_url in INVIDIOUS_INSTANCES:
+        try:
+            url = f"{base_url}/api/v1/videos/{video_id}"
+            r = requests.get(url, timeout=4)
+            if r.status_code != 200:
+                continue
+            data = r.json()
+            captions = data.get("captions", [])
+            if not captions:
+                continue
+
+            # Prioritize English captions
+            chosen = None
+            for cap in captions:
+                lang = (cap.get("language") or "").lower()
+                label = (cap.get("label") or "").lower()
+                if "en" in lang or "english" in label:
+                    chosen = cap
+                    break
+            if not chosen:
+                chosen = captions[0]
+
+            caption_url = chosen.get("url")
+            if not caption_url:
+                continue
+            if caption_url.startswith("/"):
+                caption_url = base_url + caption_url
+
+            cap_res = requests.get(caption_url, timeout=4)
+            if cap_res.status_code == 200 and cap_res.text.strip():
+                clean_text = parse_vtt(cap_res.text)
+                if len(clean_text) > 50:
+                    logger.info("Successfully fetched real transcript from %s", base_url)
+                    return clean_text
+        except Exception as e:
+            logger.debug("Invidious instance %s failed: %s", base_url, e)
+            continue
+    return None
 
 def transcribe_with_groq_whisper(video_url: str) -> Optional[str]:
     """Download audio stream via yt-dlp (with cookies if available) and transcribe via Groq Whisper API."""
@@ -231,20 +281,20 @@ async def root():
 async def process_video(request: VideoRequest):
     """
     Process a YouTube video:
-    1. Extract transcript (via user paste, YouTube API, or Groq Whisper audio pipeline)
-    2. Fall back to demo transcript if cloud IP blocked and no cookies configured
-    3. Chunk the text
-    4. Generate embeddings
-    5. Store in Qdrant
+    1. Extract transcript (via user paste, YouTube API, free Invidious API pool, or Groq Whisper)
+    2. Chunk the text
+    3. Generate embeddings
+    4. Store in Qdrant
     """
     try:
         # Extract video ID
         video_id = extract_video_id(request.video_url)
-        fallback_used = False
+        source_mode = "youtube_direct"
 
         # If user explicitly passed transcript text, use it directly
         if request.transcript and request.transcript.strip():
             transcript_text = request.transcript.strip()
+            source_mode = "user_pasted"
         else:
             # 1. Try primary method: YouTubeTranscriptApi (fastest, uses cookies if configured)
             transcript_text = ""
@@ -266,15 +316,25 @@ async def process_video(request: VideoRequest):
                 except Exception as e2:
                     logger.info("Subtitle list fallback failed (%s)", e2)
 
-            # 2. If subtitle scraping was blocked or failed, try Groq Whisper audio pipeline
+            # 2. If direct fetch was blocked by cloud IP, try free Invidious proxy API pool
+            if not transcript_text.strip():
+                logger.info("Attempting free Invidious API pool for video %s...", video_id)
+                invidious_text = fetch_transcript_from_invidious(video_id)
+                if invidious_text and invidious_text.strip():
+                    transcript_text = invidious_text.strip()
+                    source_mode = "free_invidious_api"
+                    logger.info("Successfully retrieved real transcript via free Invidious API!")
+
+            # 3. If still empty, try Groq Whisper audio pipeline via yt-dlp
             if not transcript_text.strip():
                 logger.info("Attempting Groq Whisper audio pipeline for %s...", request.video_url)
                 whisper_text = transcribe_with_groq_whisper(request.video_url)
                 if whisper_text and whisper_text.strip():
                     transcript_text = whisper_text.strip()
+                    source_mode = "groq_whisper"
                     logger.info("Successfully transcribed video using Groq Whisper!")
 
-            # 3. If both failed, return user-friendly message prompting other content sources
+            # 4. If all automated methods fail, return user-friendly message prompting other content sources
             if not transcript_text.strip():
                 raise HTTPException(
                     status_code=400,
@@ -334,18 +394,13 @@ async def process_video(request: VideoRequest):
             points=points
         )
 
-        message = (
-            "Video processed with demo fallback transcript (YouTube cloud IP block bypassed). RAG Q&A is ready!"
-            if fallback_used
-            else "Video processed successfully"
-        )
-
         return {
-            "message": message,
+            "message": "Video processed successfully",
+            "source_mode": source_mode,
             "video_id": video_id,
             "chunks_created": len(chunks),
             "transcript_length": len(transcript_text),
-            "fallback_used": fallback_used,
+            "fallback_used": False,
         }
 
     except ValueError as e:
