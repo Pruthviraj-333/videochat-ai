@@ -14,12 +14,16 @@ This repository features a complete, battle-tested DevOps engineering layer: mul
 
 ---
 
+<!--
+
 ## Live Production Deployment
 
-* **Public Web URL (HTTP):** [http://100.53.110.63](http://100.53.110.63)
-* **Public Web URL (HTTPS):** [https://100.53.110.63](https://100.53.110.63)
-* **Mobile / Wildcard DNS:** [http://100.53.110.63.nip.io](http://100.53.110.63.nip.io)
-* **Health Check API:** [http://100.53.110.63/api/health](http://100.53.110.63/api/health)
+- **Public Web URL (HTTP):** [http://100.53.110.63](http://100.53.110.63)
+- **Public Web URL (HTTPS):** [https://100.53.110.63](https://100.53.110.63)
+- **Mobile / Wildcard DNS:** [http://100.53.110.63.nip.io](http://100.53.110.63.nip.io)
+- **Health Check API:** [http://100.53.110.63/api/health](http://100.53.110.63/api/health)
+
+-->
 
 ---
 
