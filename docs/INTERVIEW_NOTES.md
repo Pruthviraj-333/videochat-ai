@@ -164,6 +164,33 @@ This document provides technical rationales, architectural design trade-offs, an
 
 ---
 
+## 11. Solving Cloud Datacenter IP Blocking (Invidious Rotating Pool & Groq Whisper)
+
+### Question: Cloud providers like AWS/GCP are heavily blocked by YouTube bot detection (`IpBlocked` / `Sign in to confirm you're not a bot`). How did you architect a production-grade, 100% free bypass?
+
+#### Rationale & Technical Defense:
+* **The Root Problem:** YouTube aggressively blacklists major cloud datacenter CIDR blocks (AWS us-east-1, GCP, Azure). When `youtube-transcript-api` or `yt-dlp` runs on an EC2 instance, YouTube immediately rejects direct requests with `IpBlocked` or bot challenges.
+* **The Solution Architecture (Multi-Tier Resilience):**
+  1. **Tier 1 (Free Invidious Rotating API Pool):** We implemented an automated query pool across public, healthy Invidious instances (`yt.chocolatemoo53.com`, `invidious.tiekoetter.com`). These instances run on non-datacenter networks, providing clean WebVTT subtitle endpoints (`/api/v1/captions/{videoId}`) that fetch official and auto-generated transcripts with zero cookies or API keys.
+  2. **Tier 2 (Groq Whisper Speech-to-Text Pipeline):** If a video lacks transcripts entirely, users can upload the audio file (`POST /api/process-audio`) or extract audio via `yt-dlp`. Audio is transcribed via Groq's `whisper-large-v3` API and indexed directly into Qdrant.
+  3. **Tier 3 (User Transcript Paste):** Users can paste arbitrary text directly into the web UI, bypassing all cloud server IP challenges with instant vector indexing.
+  4. **Actionable UI Guidance:** If automated extraction fails, the UI dynamically displays amber guidance with one-click switch buttons to Paste Text or Audio Upload.
+
+---
+
+## 12. Dual-Port HTTP/HTTPS & Mobile Client Compatibility
+
+### Question: Why did mobile clients experience `ERR_CONNECTION_TIMED_OUT` when accessing the EC2 IP, and how did you resolve it?
+
+#### Rationale & Technical Defense:
+* **The Problem:** Modern smartphone browsers (iOS Safari 17+ and Android Chrome 120+) enforce "HTTPS-First mode", automatically rewriting bare IP addresses from `http://` to `https://` on Port 443. Because the EC2 instance only had Port 80 open, the AWS Security Group silently dropped TCP SYN packets on Port 443, causing mobile connections to hang and time out with `ERR_CONNECTION_TIMED_OUT`.
+* **The Engineering Fix:**
+  1. **AWS Security Group Ingress:** Authorized TCP Port 443 (`0.0.0.0/0`) on `production-videochat-sg`.
+  2. **SSL Termination at Nginx:** Configured Nginx inside `videochat-frontend` to listen on both Port 80 and Port 443 with self-signed TLS certificates and strong ciphers.
+  3. **Wildcard DNS Support:** Added support for `100.53.110.63.nip.io`, allowing iOS devices with iCloud Private Relay (which blocks bare IP addresses) and mobile cellular carriers with strict NAT64 gateways to route smoothly.
+
+---
+
 ## Summary of Key Metrics & Achievements
 
 | Metric / Dimension | Specification / Result |
@@ -173,5 +200,7 @@ This document provides technical rationales, architectural design trade-offs, an
 | **Backend Startup Time** | **< 2 seconds** (models pre-baked at build time) |
 | **RAM Utilization on EC2** | Kept stable under 1 GB via **2 GB Swap (`swappiness=10`)** |
 | **Lint & Security Compliance** | **0 Hadolint warnings**, **0 Ruff errors**, **Trivy gated** |
+| **Automated Test Suite** | **10 / 10 pytest tests passing** (health, Invidious, Whisper, RAG) |
 | **Rollback Time** | **< 15 seconds** automated failover on failed healthcheck |
+| **Protocols Supported** | **Dual HTTP (Port 80) & HTTPS (Port 443 SSL)** |
 

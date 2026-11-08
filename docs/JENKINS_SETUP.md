@@ -10,7 +10,7 @@ This guide walks you through setting up, configuring, and operating the automate
                                       CI/CD Automation Pipeline
  ┌───────────────┐     ┌────────────────────────────────────────────────────────────────────────┐     ┌─────────────────────┐
  │ Git Push / PR │ ──> │ Jenkinsfile (Declarative Pipeline)                                     │ ──> │ Production EC2      │
- └───────────────┘     │                                                                        │     │ (100.53.43.88)      │
+ └───────────────┘     │                                                                        │     │ (100.53.110.63)     │
                        │ 1. Checkout SCM                                                        │     │                     │
                        │ 2. Linting (Parallel: Hadolint + Ruff)                                │     │ 1. SCP Compose &    │
                        │ 3. Automated Tests (pytest with mocked Groq & YouTube APIs)            │     │    deploy.sh        │
