@@ -13,7 +13,12 @@
 
 ## Architecture
 
-The diagram below is written in [Eraser](https://app.eraser.io) diagram-as-code DSL. Paste it at [app.eraser.io/new](https://app.eraser.io/new) to render the full cloud architecture diagram.
+![VideoChat AI Architecture](docs/architecture.png)
+
+<details>
+<summary>View Diagram-as-Code (Eraser DSL)</summary>
+
+Paste into [app.eraser.io/new](https://app.eraser.io/new) to edit or re-render:
 
 ```
 direction right
@@ -44,6 +49,7 @@ Developer > GitHub: git push
 GitHub > Jenkins: Webhook / SCM Poll
 Jenkins > DockerHub: docker push build-N-sha
 Jenkins > EC2: SSH + deploy.sh
+DockerHub > EC2: docker compose pull (deploy.sh)
 Terraform > EC2: terraform apply (provisions)
 EC2 > CloudWatch: metrics
 
@@ -52,6 +58,8 @@ Backend > Qdrant: vector search / upsert
 Backend > Groq: LLM inference (RAG answer)
 Backend > YouTube: transcript fetch (proxy-aware)
 ```
+
+</details>
 
 ---
 
@@ -507,6 +515,7 @@ videochat-ai/
 │   └── run-checks.ps1            # Windows PowerShell quality gate
 │
 └── docs/
+    ├── architecture.png          # System architecture diagram
     ├── INTERVIEW_NOTES.md        # 13-section architectural trade-off notes
     └── JENKINS_SETUP.md          # Step-by-step Jenkins configuration guide
 ```
