@@ -1,355 +1,346 @@
-# VideoChat AI — Enterprise DevOps & Cloud Native RAG Platform
+# 🎬 VideoChat AI
 
-[![Docker](https://img.shields.io/badge/Docker-Containerized-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
-[![Terraform](https://img.shields.io/badge/Terraform-1.5+-844FBA?logo=terraform&logoColor=white)](https://www.terraform.io/)
-[![AWS](https://img.shields.io/badge/AWS-Free--Tier-FF9900?logo=amazon-aws&logoColor=white)](https://aws.amazon.com/)
-[![Jenkins](https://img.shields.io/badge/Jenkins-CI%2FCD-D24939?logo=jenkins&logoColor=white)](https://www.jenkins.io/)
-[![Security](https://img.shields.io/badge/Security-Trivy--Gated-1904DA?logo=aquasec&logoColor=white)](https://trivy.dev/)
-[![Code Quality](https://img.shields.io/badge/Linter-Ruff%20%7C%20Hadolint-brightgreen)](https://github.com/astral-sh/ruff)
-[![Tests](https://img.shields.io/badge/Tests-10%20Passed-brightgreen)](https://docs.pytest.org/)
+> **Containerized, CI/CD-automated, Terraform-provisioned** YouTube Q&A platform — deployed on AWS with a full Jenkins pipeline and zero-downtime rollback.
 
-VideoChat AI is a production-grade, containerized Video Q&A platform powered by Retrieval-Augmented Generation (RAG). Users can ingest YouTube video URLs, paste raw transcripts directly, or upload audio recordings (`.mp3`, `.m4a`, `.wav`). The system automatically extracts, chunks, and indexes transcripts into a high-performance Qdrant vector database using pre-warmed FastEmbed embeddings, enabling context-grounded, low-latency conversational answers powered by Groq LLMs.
-
-This repository features a complete, battle-tested DevOps engineering layer: multi-stage Docker builds, automated testing & linting gates (Ruff + Hadolint), Terraform AWS infrastructure, a declarative 8-stage Jenkins CI/CD pipeline with Trivy container security scanning, zero-downtime healthcheck rollback scripts, and dual HTTP/HTTPS Nginx reverse proxy routing.
+[![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white)](https://hub.docker.com/u/pruthvirajjanwade333)
+[![Jenkins](https://img.shields.io/badge/Jenkins-D24939?logo=jenkins&logoColor=white)](https://www.jenkins.io/)
+[![Terraform](https://img.shields.io/badge/Terraform-7B42BC?logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![AWS](https://img.shields.io/badge/AWS-232F3E?logo=amazonaws&logoColor=white)](https://aws.amazon.com/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 
 ---
 
-<!--
-
-## Live Production Deployment
-
-- **Public Web URL (HTTP):** [http://100.53.110.63](http://100.53.110.63)
-- **Public Web URL (HTTPS):** [https://100.53.110.63](https://100.53.110.63)
-- **Mobile / Wildcard DNS:** [http://100.53.110.63.nip.io](http://100.53.110.63.nip.io)
-- **Health Check API:** [http://100.53.110.63/api/health](http://100.53.110.63/api/health)
-
--->
-
----
-
-## Architecture
+## 📐 Architecture
 
 ```mermaid
-flowchart TD
-    subgraph Client["External Users & Mobile Clients"]
-        Browser["Desktop & Mobile Browsers (HTTP:80 & HTTPS:443)"]
+flowchart LR
+    Dev["👨‍💻 Developer\n(git push)"]
+    GH["GitHub\nmain branch"]
+    Jenkins["Jenkins\n(Self-hosted in Docker)\n8 Pipeline Stages"]
+    DH["Docker Hub\npruthvirajjanwade333/\nvideochat-backend\nvideochat-frontend"]
+    TF["Terraform\ninfra/main.tf\nus-east-1"]
+    EC2["AWS EC2\nt3.micro\nUbuntu 24.04 LTS\n30 GB gp3 EBS"]
+    CW["CloudWatch\nCPU Alarm\nStatus Alarm"]
+
+    Dev -->|"git push"| GH
+    GH -->|"Webhook / SCM Poll"| Jenkins
+    Jenkins -->|"docker push :build-N-sha"| DH
+    Jenkins -->|"SSH + deploy.sh"| EC2
+    TF -->|"terraform apply\nprovisions"| EC2
+    EC2 -->|"metrics"| CW
+
+    subgraph "EC2 Docker Compose Stack"
+        Nginx["Nginx\n(Port 80 / 443)"]
+        Backend["FastAPI Backend\n(Port 8000 internal)"]
+        Qdrant["Qdrant Vector DB\n(Port 6333 internal)"]
     end
 
-    subgraph AWS["AWS Cloud (us-east-1) — Dedicated VPC (10.0.0.0/16)"]
-        subgraph PublicSubnet["Public Subnet (10.0.1.0/24)"]
-            subgraph EC2["EC2 Instance (t3.micro — Free Tier + 2GB Swap)"]
-                subgraph DockerStack["Docker Compose Isolated Bridge Network"]
-                    Nginx["Nginx Reverse Proxy & Static Web (Port 80 & 443 SSL)"]
-                    FastAPI["FastAPI Backend (Port 8000 — Non-Root appuser)"]
-                    FastEmbed["FastEmbed ONNX Runtime (BAAI/bge-small-en-v1.5)"]
-                    Qdrant["Qdrant Vector DB (v1.15.0 — Port 6333)"]
-                    Volume[("Persistent Storage: videochat_qdrant_data")]
-                end
-            end
-            SG["Security Group (Port 80 & 443: 0.0.0.0/0 | Port 22: Restricted)"]
-        end
-        CW["CloudWatch Alarms (CPU > 80% | Status Checks)"]
-        IAM["IAM Instance Profile (SSM Session Manager)"]
-    end
-
-    subgraph Ingestion["Multi-Source Ingestion Pipeline"]
-        Invidious["Free Invidious Rotating API Pool (Bypasses Cloud IP bans)"]
-        GroqWhisper["Groq Whisper API (Speech-to-Text /process-audio)"]
-        DirectPaste["Direct Text Paste (Instant Indexing)"]
-    end
-
-    subgraph ExternalServices["External Inference & APIs"]
-        GroqLLM["Groq Cloud LLM (qwen/qwen3.8-27b)"]
-    end
-
-    subgraph CICD["CI/CD Automation Pipeline"]
-        Git["GitHub Repository"] --> Jenkins["Jenkins CI/CD (Docker-in-Docker)"]
-        Jenkins --> Tests["Pytest Suite (10 Tests) + Ruff + Hadolint"]
-        Tests --> Build["Docker Build (Build ID & Git SHA)"]
-        Build --> Trivy["Trivy Vulnerability Scan"]
-        Trivy --> DockerHub["Docker Hub Registry"]
-        DockerHub --> Approval["Manual Approval Gate"]
-        Approval --> Deploy["SSH Deploy + Health Check + Auto-Rollback"]
-        Deploy -.-> EC2
-    end
-
-    Browser -->|HTTP:80 & HTTPS:443| Nginx
-    Nginx -->|Static React App & Assets| Browser
-    Nginx -->|Proxy /api/*| FastAPI
-    FastAPI <-->|Local ONNX Embeddings| FastEmbed
-    FastAPI <-->|Vector Upsert & Cosine Retrieval| Qdrant
-    Qdrant <--> Volume
-    FastAPI --> Ingestion
-    FastAPI -->|Query Context & Synthesize| GroqLLM
-    EC2 --- IAM
-    EC2 --- CW
+    EC2 --- Nginx
+    Nginx -->|"/api/ proxy"| Backend
+    Backend --> Qdrant
+    Backend -->|"Transcript fetch\n(proxy-aware)"| YT["YouTube\nTranscript API"]
+    Backend -->|"LLM inference"| Groq["Groq Cloud API\n(qwen3.8-27b)"]
 ```
 
 ---
 
-## Tech Stack Overview
+## 🚀 DevOps Highlights
 
-| Category | Technologies | Description & Production Highlights |
-| :--- | :--- | :--- |
-| **Frontend** | React 19, Vite, Tailwind CSS, Lucide | Modern 3-tab ingestion UI; dynamic 5-theme color grading engine; rich Markdown answer formatting; one-click copy actions; expandable Qdrant vector citation accordion. |
-| **Backend** | Python 3.11, FastAPI, Uvicorn | High-throughput asynchronous REST API executing as unprivileged `appuser:appgroup`; models baked into container at build time. |
-| **Multi-Source Ingestion** | Invidious Pool, Groq Whisper, Text Paste | Free rotating Invidious open-source API pool bypassing AWS/GCP datacenter IP blocks; Groq `whisper-large-v3` audio transcription pipeline; manual transcript paste. |
-| **Vector DB** | Qdrant `v1.15.0` | Production vector database running on dedicated bridge network with persisted volume mounts and automated health checks. |
-| **AI / RAG** | FastEmbed (`bge-small-en-v1.5`), Groq | Sub-15ms local ONNX vector embeddings coupled with high-token/sec Groq LLM inference (`qwen/qwen3.8-27b`). |
-| **Containerization** | Docker, Docker Compose, Nginx | Multi-stage caching, non-root users, reverse proxy routing on ports 80 & 443 with SSL termination. |
-| **Infrastructure** | Terraform (`>= 1.5.0`), AWS | Complete IaC setup: VPC, Subnet, IGW, Route Table, Security Group, IAM Role (SSM), EC2 `t3.micro`, CloudWatch alarms. |
-| **CI / CD** | Jenkins (Declarative), Docker Hub | 8-stage automated pipeline: Checkout, Parallel Lint, Unit Tests, Image Build, Trivy Scan, Push, Approval, Deploy. |
-| **Deployment** | Bash (`set -euo pipefail`), Docker Compose | Zero-downtime deployment script with automated 60s healthcheck polling and instant version rollback on failure. |
-| **Quality & Security**| Ruff, Hadolint, pytest, Trivy | Zero-warning linting policy, container vulnerability gating, non-root execution, zero secrets in source. |
+- **8-stage Jenkins declarative pipeline** — Checkout → Lint (parallel Hadolint + Ruff) → pytest → Docker Build → Trivy CVE Scan → Push to Registry → Manual Approval Gate → SSH Deploy with auto-rollback
+- **13 AWS resources** provisioned via Terraform in a single `terraform apply`: VPC, IGW, public subnet, route table + association, security group, IAM role + policy attachments (SSM + CloudWatch) + instance profile, EC2 `t3.micro`, and 2 CloudWatch alarms
+- **Zero-downtime deployment** — `scripts/deploy.sh` polls `/api/health` for 60 s (12 × 5 s retries); auto-rollback to the previous stable image tag on any health-check failure
+- **Multi-stage Docker build** for the frontend: Node 20-slim builder → nginx:1.27-alpine runtime (~25 MB final image vs ~400 MB single-stage)
+- **Image tagged `build-{BUILD_NUMBER}-{GIT_SHORT_SHA}`** for full audit trail; `latest` alias also maintained on Docker Hub
+- **Non-root container runtime** — backend runs as `appuser:appgroup`; FastEmbed `BAAI/bge-small-en-v1.5` model baked into the image at build time for < 2 s cold start
+- **Cost-optimised Free Tier infrastructure** — public subnet (no NAT Gateway, saves ~\$32/mo), `t3.micro` with 2 GB swap via `user-data.sh`, 30 GB encrypted gp3 EBS
 
 ---
 
-## Directory Structure
+## 🧰 Tech Stack
 
-```text
-videochat-ai/
-├── .dockerignore                     # Root Docker build ignore exclusions
-├── .env.example                      # Production environment template
-├── .hadolint.yaml                    # Dockerfile linting configuration
-├── docker-compose.yml                # Core multi-container application stack (Nginx, FastAPI, Qdrant)
-├── docker-compose.jenkins.yml        # Self-hosted Jenkins automation server stack
-├── Jenkinsfile                       # Declarative 8-stage CI/CD pipeline definition
-├── Makefile                          # Unified build, test, lint, and deployment runner
-├── ruff.toml                         # Python static analysis & linter configuration
-│
-├── Backend/                          # FastAPI Application & RAG Logic
-│   ├── Dockerfile                    # Multi-stage hardened Python image with pre-warmed models
-│   ├── main.py                       # REST API, Invidious pool, Whisper pipeline, Groq & Qdrant logic
-│   ├── requirements.txt              # Production Python dependencies
-│   ├── requirements-dev.txt          # Development, testing, and linting tools (pytest, ruff)
-│   └── tests/                        # Comprehensive unit & integration test suite
-│       └── test_api.py               # 10 automated test cases (health, validation, Invidious, RAG flow)
-│
-├── video-qa-frontend/                # React 19 Client
-│   ├── Dockerfile                    # Multi-stage build (Node 20 builder -> Nginx Alpine runtime)
-│   ├── nginx.conf                    # Nginx reverse proxy configuration for HTTP/HTTPS & SPA routing
-│   ├── package.json                  # Frontend dependencies (React 19, Lucide, Tailwind)
-│   └── src/                          # React application components & Theme Engine
-│       ├── App.jsx                   # Main application, 3-tab ingestion, theme switcher, Markdown formatter
-│       └── main.jsx                  # React DOM root entry point
-│
-├── infra/                            # Terraform Infrastructure as Code (AWS)
-│   ├── main.tf                       # VPC, Subnet, IGW, Security Group, IAM Role, EC2, CloudWatch
-│   ├── versions.tf                   # Terraform version locking & AWS provider configuration
-│   ├── variables.tf                  # Parameterized configuration inputs
-│   ├── outputs.tf                    # Operational outputs (IP, DNS, SSH string, App URL)
-│   ├── user-data.sh                  # EC2 Cloud-Init (2GB swap, Docker CE, Compose, SSM Agent)
-│   └── terraform.tfvars.example      # Example deployment overrides
-│
-├── jenkins/                          # Custom Jenkins Master Image
-│   └── Dockerfile                    # Jenkins LTS with Docker CLI and socket permissions
-│
-├── scripts/                          # Automation & Operational Runbooks
-│   ├── deploy.sh                     # Automated deployment with health polling & automatic rollback
-│   ├── test.sh                       # Pytest execution script
-│   ├── lint.sh                       # Linting runner for Ruff & Hadolint
-│   └── run-checks.ps1                # Local Windows PowerShell quality gate runner
-│
-└── docs/                             # Engineering Runbooks & Interview Notes
-    ├── JENKINS_SETUP.md              # Step-by-step Jenkins setup, credentials, and plugins guide
-    └── INTERVIEW_NOTES.md            # Deep-dive DevOps architectural defense & decision logs
-```
+### Application
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, Vite, Tailwind CSS, Lucide React |
+| Backend | FastAPI, Uvicorn, Python 3.11 |
+| AI / Embeddings | FastEmbed (`BAAI/bge-small-en-v1.5`) |
+| LLM | Groq Cloud API (qwen/qwen3.8-27b) |
+| Vector Store | Qdrant v1.15.0 |
+| Reverse Proxy | Nginx 1.27 (HTTP + HTTPS) |
+
+### DevOps / Infrastructure
+
+| Tool | Role |
+|---|---|
+| Docker & Docker Compose | Container runtime, local stack orchestration |
+| Jenkins (LTS, Dockerised) | CI/CD pipeline server |
+| Terraform ≥ 1.9 | AWS infrastructure provisioning (IaC) |
+| AWS EC2 (`t3.micro`) | Compute host |
+| AWS VPC + Subnets + IGW | Networking |
+| AWS IAM | Instance role, SSM + CloudWatch policies |
+| AWS CloudWatch | CPU and status-check alarms |
+| Docker Hub | Public container image registry |
+| Trivy | Container CVE scanning |
+| Hadolint | Dockerfile linting |
+| Ruff | Python static analysis |
+
+### AI
+
+| Component | Detail |
+|---|---|
+| Embedding model | `BAAI/bge-small-en-v1.5` via FastEmbed |
+| LLM provider | Groq Cloud (serverless inference) |
+| RAG pipeline | YouTube transcript → chunk → embed → Qdrant → retrieve → Groq |
+| YouTube proxy | Rotating Invidious pool bypasses AWS datacenter IP blocks |
 
 ---
 
-## Key Features & UI Capabilities
+## 🐳 Containerization
 
-### 1. Multi-Source Ingestion Pipeline
-* **YouTube Invidious Pool:** Automatically queries healthy open-source Invidious instances (`yt.chocolatemoo53.com`, `invidious.tiekoetter.com`) to extract clean WebVTT captions, completely bypassing AWS datacenter IP bans for free with zero API keys or cookies.
-* **Direct Transcript Paste:** Instant indexing tab for arbitrary transcripts or lecture notes, completely offline and cloud-ban immune.
-* **Audio Upload & Groq Whisper:** Dedicated tab allowing users to upload `.mp3`, `.m4a`, or `.wav` files (up to 25 MB). Transcribed using Groq `whisper-large-v3` API and indexed directly into Qdrant.
+### Services (docker-compose.yml)
 
-### 2. Interactive Theme Engine (5 Color Gradings)
-Switch visual themes on the fly using the **Palette** switcher in the top navigation bar:
-* 🟣 **Cyber Violet & Slate (Default):** High-tech dark mode inspired by Linear, Raycast, and Cursor.
-* 🟢 **Emerald Matrix:** Deep obsidian with mint jade telemetry (Supabase / Bloomberg style).
-* 🔵 **Nordic Frost & Royal Indigo:** Ultra-clean luxury light mode (Stripe / Vercel style).
-* 🟠 **Sunset Espresso & Amber:** Warm charcoal obsidian with sunset amber highlights (Anthropic Claude style).
-* 🌊 **Ocean Cyan:** Refreshing original cyan palette.
+| Service | Image | Ports |
+|---|---|---|
+| `frontend` | `pruthvirajjanwade333/videochat-frontend` | `80:80`, `443:443` |
+| `backend` | `pruthvirajjanwade333/videochat-backend` | `8000` (internal) |
+| `qdrant` | `qdrant/qdrant:v1.15.0` | `6333` (internal) |
 
-### 3. Structured Output & Context Citations
-* **Markdown Formatting:** Headings (`#`, `##`, `###`), ordered numbered badge lists (`1`, `2`), custom bullet points, blockquotes, and inline monospace code chips.
-* **Code Block Cards:** Syntax language indicators and dedicated one-click **"Copy code"** buttons.
-* **One-Click Answer Copy:** Answer header includes a **"Copy"** button with animated `Copied!` feedback.
-* **Qdrant Vector Citations Accordion:** Collapsible accordion displaying the exact text chunks and character lengths retrieved from Qdrant that grounded the LLM's response.
+### Build & Run
 
----
-
-## Quickstart: Local Docker Deployment
-
-### 1. Clone & Configure Environment
 ```bash
+# 1. Clone the repository
 git clone https://github.com/Pruthviraj-333/videochat-ai.git
 cd videochat-ai
 
-# Copy environment template and insert your Groq API key
+# 2. Create your environment file
 cp .env.example .env
+# Edit .env — set GROQ_API_KEY (required) and other optional overrides
+
+# 3. Build images from source
+docker compose build
+
+# 4. Start the full stack
+docker compose up -d
+
+# 5. Verify health
+curl http://localhost/api/health
 ```
 
-Edit `.env`:
-```ini
-GROQ_API_KEY=gsk_your_groq_api_key_here
-GROQ_MODEL=qwen/qwen3.8-27b
-FRONTEND_PORT=3000
-```
+The app is available at **http://localhost** after the stack is healthy.
 
-### 2. Launch Stack via Docker Compose
+### Individual Image Build
+
 ```bash
-docker compose up -d --build
+# Backend
+docker build -t videochat-backend:dev ./Backend
+
+# Frontend
+docker build -t videochat-frontend:dev ./video-qa-frontend
 ```
 
-### 3. Verify Health & Access Application
+### Makefile Shortcuts
+
 ```bash
-# Verify running containers
-docker compose ps
-
-# Probe health endpoint
-curl http://localhost:3000/api/health
+make build          # docker compose build
+make up             # docker compose up -d
+make down           # docker compose down -v
+make check          # run all linters + tests (CI quality gate)
+make deploy TAG=1.0 # run scripts/deploy.sh with rollback
 ```
-Open **`http://localhost:3000`** in your browser.
 
 ---
 
-## Testing & Quality Gates
+## 🔄 CI/CD Pipeline (Jenkins)
 
-This repository enforces strict, zero-warning quality standards across Python, Docker, and infrastructure.
+### Pipeline Overview
+
+The `Jenkinsfile` defines a **declarative pipeline** with an `agent any` executor, a 30-minute global timeout, and `disableConcurrentBuilds()`. Builds are parameterised so `EC2_HOST`, `DOCKERHUB_USER`, and feature toggles can be overridden per run.
+
+### Stage-by-Stage
+
+| # | Stage | What it does |
+|---|---|---|
+| 1 | **Checkout** | `checkout scm` — pulls the triggering branch; logs Git commit SHA and image tag |
+| 2 | **Lint & Static Analysis** | Runs in **parallel**: Hadolint on `Backend/Dockerfile` + `video-qa-frontend/Dockerfile`; Ruff on `Backend/` Python source |
+| 3 | **Unit & Integration Tests** | `pip install` deps + `pytest -v --junitxml=junit.xml Backend/tests`; JUnit XML results published to Jenkins |
+| 4 | **Build Docker Images** | Builds backend and frontend images tagged `build-{BUILD_NUMBER}-{GIT_SHORT_SHA}` and `latest` |
+| 5 | **Security Scan (Trivy)** | Runs `aquasec/trivy` against both images; flags `HIGH` and `CRITICAL` CVEs (skippable via `RUN_SECURITY_SCAN=false`) |
+| 6 | **Push to Registry** | Authenticates with Docker Hub using the `docker-hub-credentials` credential; pushes both versioned and `latest` tags |
+| 7 | **Production Approval Gate** | Interactive `input` step in Jenkins UI with 60-minute timeout; records approver identity (skippable via `REQUIRE_MANUAL_APPROVAL=false`) |
+| 8 | **Deploy to Production EC2** | SCPs `docker-compose.yml` and `scripts/deploy.sh` to EC2; runs `deploy.sh {IMAGE_TAG}` via SSH with zero-downtime health-check rollback |
+
+### Triggers
+
+- **SCM Poll / Webhook** — configure GitHub webhook to `http://<jenkins-host>:8080/github-webhook/`
+- **Manual** — trigger via Jenkins UI with optional parameter overrides
+
+### Required Jenkins Credentials
+
+| Credential ID | Type | Purpose |
+|---|---|---|
+| `docker-hub-credentials` | Username + Password (PAT) | Authenticates `docker login` and `docker push` |
+| `ec2-ssh-key` | SSH Private Key (user: `ubuntu`) | SSH and SCP access to the EC2 instance |
+
+### Required Jenkins Plugins
+
+`Pipeline`, `SSH Agent`, `Credentials Binding`, `AnsiColor`, `Docker Pipeline`, `JUnit`
+
+### Start Jenkins Locally
 
 ```bash
-# Run complete quality gate (linters + tests)
-make check
+# Start Jenkins in Docker (docker-compose.jenkins.yml)
+make jenkins-up
 
-# Or individually
-make lint-python    # Ruff Python analysis (0 errors)
-make lint-docker    # Hadolint Dockerfile analysis (0 warnings)
-make test           # pytest suite (10/10 passed)
+# Access Jenkins at http://localhost:8080
+# View logs
+make jenkins-logs
+
+# Stop
+make jenkins-down
 ```
-
-### Test Suite Summary (`Backend/tests/test_api.py`)
-All 10 unit and integration tests run deterministically without external network dependencies:
-1. `test_health_endpoint` — Validates health status, Qdrant connectivity, and FastEmbed loading.
-2. `test_root_endpoint` — Validates root metadata endpoint.
-3. `test_process_video_missing_payload` — Validates 422 HTTP validation on empty input.
-4. `test_process_video_invalid_url` — Validates rejection of non-YouTube or malformed URLs.
-5. `test_ask_missing_fields` — Validates schema rejection on missing question payloads.
-6. `test_process_video_success_mocked` — Mocks direct YouTube transcript fetching, chunking, and Qdrant ingestion.
-7. `test_process_video_with_custom_transcript` — Validates direct indexing of user-provided transcripts.
-8. `test_process_video_invidious_success` — Validates automated Invidious proxy failover when YouTube blocks cloud IPs.
-9. `test_process_video_ip_blocked_fallback` — Validates actionable user guidance prompt when all automated methods fail.
-10. `test_ask_question_success_mocked` — Mocks Qdrant vector retrieval and Groq LLM completion.
 
 ---
 
-## Infrastructure as Code (Terraform AWS)
+## 🏗️ Infrastructure as Code (Terraform)
 
-The complete AWS infrastructure is defined in [`infra/`](file:///d:/videochat-ai/videochat-ai/infra) and strictly adheres to the **AWS Free Tier ($0/month)**.
+### Folder Layout
 
-### Provisioned Resources (13 Total)
-1. **Networking:** Dedicated VPC (`10.0.0.0/16`), Internet Gateway, Public Subnet (`10.0.1.0/24`), Route Table.
-2. **Security:** Security Group restricting SSH (Port 22) to developer workstation IP (`var.my_ip`), Port 80 (HTTP) and Port 443 (HTTPS) open publicly (`0.0.0.0/0`).
-3. **Compute:** EC2 `t3.micro` instance (Ubuntu 22.04 LTS) with 30 GB encrypted `gp3` storage.
-4. **Cloud-Init (`user-data.sh`):**
-   * Allocates **2 GB swap file** (`vm.swappiness=10`) preventing OOM kernel panics on 1GB RAM instances.
-   * Automatically installs Docker CE and the Docker Compose plugin.
-   * Enables AWS Systems Manager (SSM) agent for zero-open-port management.
-5. **IAM Role & Profile:** Grants `AmazonSSMManagedInstanceCore` and `CloudWatchAgentServerPolicy`.
-6. **Observability:** 2 CloudWatch metric alarms monitoring high CPU (`>80%`) and hardware status checks.
+```
+infra/
+├── main.tf               # All AWS resource definitions
+├── variables.tf          # Input variable declarations + defaults
+├── outputs.tf            # Output values (IP, URL, SSH command, etc.)
+├── versions.tf           # Required Terraform and provider versions
+├── user-data.sh          # EC2 cloud-init: Docker CE install + 2 GB swap
+└── terraform.tfvars.example  # Variable template (copy → terraform.tfvars)
+```
 
-### Deploying Infrastructure
+### AWS Resources Provisioned (`us-east-1`)
+
+| Resource | Details |
+|---|---|
+| `aws_vpc` | `10.0.0.0/16`, DNS support + hostnames enabled |
+| `aws_internet_gateway` | Attached to the VPC |
+| `aws_subnet` (public) | `10.0.1.0/24`, `us-east-1a`, auto-assign public IP |
+| `aws_route_table` | Default route `0.0.0.0/0` → IGW |
+| `aws_route_table_association` | Associates public subnet with route table |
+| `aws_security_group` | Inbound: port 80 (public), port 22 (restricted to `my_ip`); egress: all |
+| `aws_iam_role` | EC2 assume-role trust policy |
+| `aws_iam_role_policy_attachment` × 2 | `AmazonSSMManagedInstanceCore` + `CloudWatchAgentServerPolicy` |
+| `aws_iam_instance_profile` | Binds IAM role to EC2 instance |
+| `aws_instance` | `t3.micro`, Ubuntu 24.04 LTS, 30 GB encrypted gp3, `user-data.sh` |
+| `aws_cloudwatch_metric_alarm` (CPU) | Triggers when CPU > 80% for 2 × 5-min periods |
+| `aws_cloudwatch_metric_alarm` (Status) | Triggers when EC2 status check fails for 2 × 1-min periods |
+
+### Terraform Outputs
+
+| Output | Description |
+|---|---|
+| `instance_id` | EC2 instance ID |
+| `instance_public_ip` | Public IPv4 address |
+| `instance_public_dns` | Public DNS name |
+| `app_url` | `http://<public_ip>` |
+| `vpc_id` | VPC ID |
+| `security_group_id` | Security Group ID |
+| `ssh_command` | Ready-to-paste SSH command |
+
+### Input Variables (`terraform.tfvars`)
+
+```hcl
+# Copy terraform.tfvars.example → terraform.tfvars
+aws_region   = "us-east-1"
+environment  = "production"
+key_name     = "your-ec2-keypair-name"
+my_ip        = "YOUR.IP.HERE/32"   # Restricts SSH port 22 to your IP
+# ami_id     = ""                  # Leave empty to auto-select latest Ubuntu 24.04 LTS
+```
+
+### Commands
+
 ```bash
 cd infra
+
+# Initialise providers and backend
 terraform init
+
+# Check formatting
+terraform fmt -check
+
+# Validate configuration
 terraform validate
+
+# Dry-run — preview all changes
 terraform plan
+
+# Provision all 13 AWS resources
 terraform apply
-```
 
-To destroy resources and avoid charges when testing is finished:
-```bash
-terraform destroy -auto-approve
+# Tear down all resources (stops billing)
+terraform destroy
 ```
 
 ---
 
-## Jenkins CI/CD Automation
+## ☁️ Deployment on AWS
 
-A self-hosted Jenkins server definition is included to run the complete pipeline locally or on any server.
+### End-to-End Flow: `git push` → Live App
 
-### 1. Launch Jenkins Server
-```bash
-make jenkins-up
 ```
-Retrieve initial admin password:
-```bash
-docker exec videochat-jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+1. Developer pushes to main branch on GitHub
+2. Jenkins picks up the change (webhook or SCM poll)
+3. Jenkins runs 8 pipeline stages:
+   - Lints, tests, builds Docker images, scans for CVEs
+   - Pushes versioned images to Docker Hub
+   - Waits for manual approval in Jenkins UI
+4. Jenkins SSHs into the EC2 instance
+5. deploy.sh pulls new images, restarts Docker Compose services
+6. deploy.sh polls /api/health every 5 s (up to 60 s)
+   - HTTP 200 → deployment finalized, old images pruned
+   - Non-200 → automatic rollback to previous stable tag
+7. App is live at http://<EC2_PUBLIC_IP>
 ```
-Open **`http://localhost:8080`**.
 
-### 2. Configure Credentials in Jenkins
-* `docker-hub-credentials`: Username & Personal Access Token (Read & Write) for Docker Hub.
-* `ec2-ssh-key`: SSH private key (`KEY-PAIR-VIRGINIA.pem`) with user `ubuntu`.
+### Provision & Deploy from Scratch
 
-### 3. Pipeline Execution Flow
-1. **Checkout SCM:** Pulls source code from GitHub `main`.
-2. **Lint & Static Analysis:** Runs Hadolint and Ruff in parallel.
-3. **Automated Tests:** Executes pytest suite inside `python:3.11-slim` and publishes JUnit reports.
-4. **Build Images:** Tags images with `build-${BUILD_NUMBER}-${GIT_COMMIT}` and `latest`.
-5. **Trivy Vulnerability Scan:** Scans images for HIGH and CRITICAL vulnerabilities.
-6. **Push to Registry:** Authenticates with Docker Hub and pushes versioned images.
-7. **Production Approval Gate:** Requires interactive confirmation in the Jenkins UI.
-8. **Deploy to EC2:** Transfers compose files via SSH and executes `scripts/deploy.sh` with automated rollback.
+```bash
+# Step 1: Provision infrastructure
+cd infra
+terraform apply
+# Note the app_url output: http://<EC2_PUBLIC_IP>
 
-*(For complete setup instructions, see [`docs/JENKINS_SETUP.md`](file:///d:/videochat-ai/videochat-ai/docs/JENKINS_SETUP.md))*
+# Step 2: Create .env on EC2
+ssh ubuntu@<EC2_PUBLIC_IP>
+mkdir -p /opt/videochat
+echo "GROQ_API_KEY=your_key" > /opt/videochat/.env
+
+# Step 3: Configure Jenkins
+#   - Add docker-hub-credentials (Docker Hub username + PAT)
+#   - Add ec2-ssh-key (SSH private key, user: ubuntu)
+#   - Set EC2_HOST parameter to the public IP from terraform output
+#   - Point Jenkins to this repository
+
+# Step 4: Trigger pipeline
+#   git push origin main  — or manually trigger in Jenkins UI
+
+# Step 5: Access the app
+open http://$(terraform output -raw instance_public_ip)
+```
+
+> **Note:** The infrastructure is provisioned on-demand. Run `terraform apply` to bring it up and `terraform destroy` to stop all AWS billing.
 
 ---
 
-## Automated Deployment & Zero-Downtime Rollback
+## 📊 Monitoring & Health
 
-The production deployment runbook [`scripts/deploy.sh`](file:///d:/videochat-ai/videochat-ai/scripts/deploy.sh) features built-in health verification and automated rollback.
+### Health Endpoint
 
 ```bash
-# Deploy a new release tag
-./scripts/deploy.sh 1.0.4
-
-# Or via Makefile
-make deploy TAG=1.0.4
+GET /health
 ```
 
-### Rollback Lifecycle:
-1. **State Preservation:** Saves the previous stable version tag from `.current_version`.
-2. **Atomic Up:** Exports `IMAGE_TAG` and restarts containers via `docker compose up -d --remove-orphans`.
-3. **Health Check Polling:** Polls `http://localhost/api/health` every 5 seconds for up to 60 seconds (12 attempts).
-4. **Success Path:** If health check returns HTTP 200, saves tag to `.current_version`, prunes dangling images, and exits 0.
-5. **Automatic Rollback:** If health checks fail or time out after 60 seconds:
-   * Reverts `IMAGE_TAG` to `PREVIOUS_TAG`.
-   * Restarts containers with previous known-good images.
-   * Verifies rolled-back health and exits with code 1, notifying Jenkins of deployment failure.
-
----
-
-## Security & Hardening Highlights
-
-* **Principle of Least Privilege:** Backend container drops root privileges and executes as non-root `appuser:appgroup`.
-* **Zero Secrets in Code:** `GROQ_API_KEY` and AWS credentials are never committed; loaded strictly via environment variables.
-* **IAM Instance Profiles:** EC2 accesses AWS services via STS temporary credentials; no long-lived AWS keys stored on the host.
-* **AWS SSM Session Manager:** Instances can be managed with Port 22 completely closed.
-* **Internal Network Isolation:** Database (Qdrant) and API (FastAPI) are not exposed to the public internet; accessible only internally via Nginx.
-* **Continuous Vulnerability Auditing:** Trivy gates builds against critical OS and package vulnerabilities.
-* **Dual Port HTTP/HTTPS:** Terminated at Nginx with TLS encryption, eliminating mobile browser `ERR_CONNECTION_TIMED_OUT` blocks.
-
----
-
-## API Reference
-
-### 1. Health Check
-```http
-GET /api/health
-```
-**Response (200 OK):**
+**Response (healthy):**
 ```json
 {
   "status": "healthy",
@@ -359,70 +350,182 @@ GET /api/health
 }
 ```
 
-### 2. Process Video or Paste Transcript
-```http
-POST /api/process-video
-Content-Type: application/json
+The endpoint is used by:
+- **Docker** — `HEALTHCHECK` in `Backend/Dockerfile` polls every 30 s, 60 s start period, 3 retries
+- **deploy.sh** — polls `/api/health` for 60 s post-deploy before confirming or rolling back
+- **Jenkins** — stage 8 indirectly checks health via `deploy.sh` exit code
 
-{
-  "video_url": "https://www.youtube.com/watch?v=qAF1NjEVHhY",
-  "transcript": "Optional user-pasted text..."
-}
-```
-**Response (200 OK):**
-```json
-{
-  "message": "Video processed successfully",
-  "source_mode": "free_invidious_api",
-  "video_id": "qAF1NjEVHhY",
-  "chunks_created": 4,
-  "transcript_length": 7417
-}
-```
+### CloudWatch Alarms
 
-### 3. Upload & Transcribe Audio (Groq Whisper)
-```http
-POST /api/process-audio
-Content-Type: multipart/form-data
+| Alarm | Condition | Action |
+|---|---|---|
+| `{env}-videochat-cpu-high` | CPU > 80% for 2 × 5-min periods | Alarm state (no SNS action configured — see Future Improvements) |
+| `{env}-videochat-status-check-failed` | EC2 status check fails for 2 × 1-min | Alarm state |
 
-file: [binary audio file (.mp3, .m4a, .wav)]
-video_url: "https://www.youtube.com/watch?v=..." (optional)
-```
-**Response (200 OK):**
-```json
-{
-  "message": "Audio processed successfully",
-  "video_id": "custom_audio_a1b2c3d4",
-  "chunks_created": 3,
-  "transcript_length": 4820
-}
-```
+### Logging
 
-### 4. Ask Question
-```http
-POST /api/ask
-Content-Type: application/json
+Container logs are accessible via:
+```bash
+# On the EC2 host
+docker compose logs -f backend
+docker compose logs -f frontend
 
-{
-  "video_url": "https://www.youtube.com/watch?v=qAF1NjEVHhY",
-  "question": "What are the main concepts discussed?"
-}
-```
-**Response (200 OK):**
-```json
-{
-  "answer": "The video discusses ...",
-  "relevant_chunks": [
-    "Context chunk 1 from Qdrant vector retrieval...",
-    "Context chunk 2 from Qdrant vector retrieval..."
-  ]
-}
+# Jenkins pipeline streams all stage output to build console log
 ```
 
 ---
 
-## Engineering Runbooks & Interview Notes
+## 💻 Local Development
 
-For deep-dive architectural rationales, design trade-offs, and interview preparation notes, refer to:
-* **[`docs/INTERVIEW_NOTES.md`](file:///d:/videochat-ai/videochat-ai/docs/INTERVIEW_NOTES.md)** — Architectural defense notes covering multi-stage caching, swap sizing, NAT gateway cost trade-offs, Invidious rotating proxy pool, Whisper audio pipelines, and mobile HTTPS timeouts.
-* **[`docs/JENKINS_SETUP.md`](file:///d:/videochat-ai/videochat-ai/docs/JENKINS_SETUP.md)** — Complete guide for Jenkins automation, credentials configuration, and troubleshooting.
+### Prerequisites
+
+- Docker Desktop (or Docker Engine + Compose v2)
+- Python 3.11+ (for running tests without Docker)
+- Node.js 20+ (for frontend dev server)
+- `ruff` and `hadolint` (for linting)
+
+### Backend (FastAPI)
+
+```bash
+cd Backend
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt
+
+# Start Qdrant (required by backend)
+docker run -d -p 6333:6333 qdrant/qdrant:v1.15.0
+
+# Run the API server
+GROQ_API_KEY=your_key uvicorn main:app --reload --port 8000
+```
+
+### Frontend (React + Vite)
+
+```bash
+cd video-qa-frontend
+npm install
+npm run dev
+# App available at http://localhost:5173
+```
+
+### Full Stack (Recommended)
+
+```bash
+cp .env.example .env
+# Edit .env — set GROQ_API_KEY
+
+make up              # starts all 3 services
+# App at http://localhost
+
+make test            # run pytest suite
+make lint            # run Ruff + Hadolint
+make check           # full CI quality gate (lint + test)
+```
+
+---
+
+## 🤖 Application Overview
+
+VideoChat AI lets you have a conversation with any YouTube video. It extracts the transcript, chunks and embeds it into Qdrant, and answers questions using retrieval-augmented generation (RAG) via the Groq Cloud LLM API.
+
+### Features
+
+- 🎥 **YouTube Q&A** — paste any YouTube URL and ask questions about the video content
+- 🎙️ **Audio upload** — upload `.mp3`/`.mp4` files and ask questions about recorded audio
+- ⚡ **Fast retrieval** — `BAAI/bge-small-en-v1.5` embeddings pre-baked into the Docker image; < 2 s startup
+- 📚 **Multi-video library** — index multiple videos and query any of them
+- 🔄 **Proxy-aware** — routes YouTube transcript requests through a configurable proxy to bypass cloud datacenter IP blocks
+
+### API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Service health check (Qdrant + model status) |
+| `POST` | `/process-video` | Index a YouTube video by URL `{"video_url": "..."}` |
+| `POST` | `/process-audio` | Index an uploaded audio file (multipart: `file`, optional `video_url`) |
+| `POST` | `/ask` | Ask a question about an indexed video `{"video_url": "...", "question": "..."}` |
+| `GET` | `/videos` | List all indexed videos |
+| `DELETE` | `/videos/{video_id}` | Remove an indexed video from Qdrant |
+
+---
+
+## 📁 Project Structure
+
+```
+videochat-ai/
+├── Jenkinsfile                   # Declarative 8-stage CI/CD pipeline
+├── Makefile                      # Unified dev/CI/Terraform shortcuts
+├── docker-compose.yml            # Production stack (frontend, backend, qdrant)
+├── docker-compose.jenkins.yml    # Self-hosted Jenkins server
+├── .env.example                  # Environment variable template
+├── .dockerignore                 # Docker build context exclusions
+├── .hadolint.yaml                # Hadolint Dockerfile linter config
+├── ruff.toml                     # Ruff Python linter config
+├── .gitignore
+│
+├── Backend/                      # FastAPI application
+│   ├── Dockerfile                # python:3.11-slim, non-root, model pre-baked
+│   ├── main.py                   # FastAPI app + all route handlers
+│   ├── requirements.txt          # Production Python dependencies
+│   ├── requirements-dev.txt      # Test/dev dependencies (pytest, etc.)
+│   └── tests/
+│       └── test_api.py           # 10 pytest unit + integration tests
+│
+├── video-qa-frontend/            # React 19 + Vite frontend
+│   ├── Dockerfile                # Multi-stage: node:20-slim → nginx:1.27-alpine
+│   ├── nginx.conf                # HTTP/HTTPS reverse proxy config
+│   ├── package.json              # React, Tailwind CSS, Vite, Lucide React
+│   ├── src/
+│   │   └── App.jsx               # Main application component
+│   └── public/
+│
+├── infra/                        # Terraform Infrastructure as Code
+│   ├── main.tf                   # All 13 AWS resource definitions
+│   ├── variables.tf              # Input variables with defaults
+│   ├── outputs.tf                # Outputs (IP, URL, SSH command)
+│   ├── versions.tf               # Provider version constraints
+│   ├── user-data.sh              # EC2 cloud-init (Docker + 2 GB swap)
+│   └── terraform.tfvars.example  # Variable template
+│
+├── jenkins/
+│   └── Dockerfile                # Jenkins LTS + Docker CLI (for docker-in-docker)
+│
+├── scripts/
+│   ├── deploy.sh                 # Zero-downtime deploy + health-check rollback
+│   ├── lint.sh                   # Linting runner script
+│   ├── test.sh                   # Test runner script
+│   └── run-checks.ps1            # Windows PowerShell quality gate
+│
+└── docs/
+    ├── INTERVIEW_NOTES.md        # 13-section architectural trade-off notes
+    └── JENKINS_SETUP.md          # Step-by-step Jenkins configuration guide
+```
+
+---
+
+## 🔮 Future Improvements
+
+> Items below are **not yet implemented** and are listed as planned enhancements only.
+
+| Item | Description |
+|---|---|
+| **GitHub Actions** | Add `.github/workflows/` for PR checks and branch protection (no Actions workflows exist yet) |
+| **Kubernetes (EKS/Helm)** | Replace Docker Compose on EC2 with a Kubernetes deployment for horizontal scaling |
+| **Terraform Remote Backend** | Migrate `terraform.tfstate` from local to S3 + DynamoDB locking (currently the state file is committed to git) |
+| **SNS Notifications on CloudWatch Alarms** | Add `alarm_actions` to `aws_cloudwatch_metric_alarm` resources to send email/SMS alerts |
+| **Prometheus + Grafana** | Add observability layer for request latency, error rates, and Qdrant collection metrics |
+| **ECR (instead of Docker Hub)** | Move images to AWS ECR when image size is reduced below the free-tier threshold |
+| **Managed TLS (ACM + ALB)** | Replace self-signed Nginx certificate with AWS Certificate Manager + Application Load Balancer |
+| **Multi-AZ / Auto Scaling** | High-availability setup across multiple availability zones |
+
+---
+
+## 📄 License
+
+MIT — see [LICENSE](LICENSE) if present.
+
+---
+
+<p align="center">
+  Built with FastAPI · React · Qdrant · Groq · Docker · Jenkins · Terraform · AWS
+</p>
