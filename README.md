@@ -15,52 +15,6 @@
 
 ![VideoChat AI Architecture](docs/architecture.png)
 
-<details>
-<summary>View Diagram-as-Code (Eraser DSL)</summary>
-
-Paste into [app.eraser.io/new](https://app.eraser.io/new) to edit or re-render:
-
-```
-direction right
-
-// ── Actors & External Services ───────────────────────────────────────────────
-Developer [icon: user, label: "Developer\n(git push)"]
-GitHub [icon: github, label: "GitHub\nmain branch"]
-DockerHub [icon: docker, label: "Docker Hub\nvideochat-backend\nvideochat-frontend"]
-Groq [icon: cloud, label: "Groq Cloud API\n(qwen3.8-27b)"]
-YouTube [icon: youtube, label: "YouTube\nTranscript API"]
-
-// ── CI/CD ────────────────────────────────────────────────────────────────────
-Jenkins [icon: jenkins, label: "Jenkins\n(Self-hosted in Docker)\n8 Pipeline Stages"]
-
-// ── Infrastructure (Terraform-provisioned) ───────────────────────────────────
-Terraform [icon: terraform, label: "Terraform\ninfra/main.tf\nus-east-1"]
-CloudWatch [icon: aws-cloudwatch, label: "CloudWatch\nCPU Alarm\nStatus Alarm"]
-
-// ── AWS EC2 Compose Stack ────────────────────────────────────────────────────
-EC2 [icon: aws-ec2, label: "AWS EC2\nt3.micro · Ubuntu 24.04 LTS\n30 GB gp3 EBS"] {
-  Nginx [icon: nginx, label: "Nginx\nPort 80 / 443 (SSL)"]
-  Backend [icon: python, label: "FastAPI Backend\nPort 8000 (internal)"]
-  Qdrant [icon: database, label: "Qdrant Vector DB\nPort 6333 (internal)"]
-}
-
-// ── Connections ──────────────────────────────────────────────────────────────
-Developer > GitHub: git push
-GitHub > Jenkins: Webhook / SCM Poll
-Jenkins > DockerHub: docker push build-N-sha
-Jenkins > EC2: SSH + deploy.sh
-DockerHub > EC2: docker compose pull (deploy.sh)
-Terraform > EC2: terraform apply (provisions)
-EC2 > CloudWatch: metrics
-
-Nginx > Backend: /api/ proxy
-Backend > Qdrant: vector search / upsert
-Backend > Groq: LLM inference (RAG answer)
-Backend > YouTube: transcript fetch (proxy-aware)
-```
-
-</details>
-
 ---
 
 ## DevOps Highlights
