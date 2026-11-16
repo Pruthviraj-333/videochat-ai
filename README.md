@@ -1,4 +1,4 @@
-# 🎬 VideoChat AI
+# VideoChat AI
 
 > **Containerized, CI/CD-automated, Terraform-provisioned** YouTube Q&A platform — deployed on AWS with a full Jenkins pipeline and zero-downtime rollback.
 
@@ -11,53 +11,63 @@
 
 ---
 
-## 📐 Architecture
+## Architecture
 
-```mermaid
-flowchart LR
-    Dev["👨‍💻 Developer\n(git push)"]
-    GH["GitHub\nmain branch"]
-    Jenkins["Jenkins\n(Self-hosted in Docker)\n8 Pipeline Stages"]
-    DH["Docker Hub\npruthvirajjanwade333/\nvideochat-backend\nvideochat-frontend"]
-    TF["Terraform\ninfra/main.tf\nus-east-1"]
-    EC2["AWS EC2\nt3.micro\nUbuntu 24.04 LTS\n30 GB gp3 EBS"]
-    CW["CloudWatch\nCPU Alarm\nStatus Alarm"]
+The diagram below is written in [Eraser](https://app.eraser.io) diagram-as-code DSL. Paste it at [app.eraser.io/new](https://app.eraser.io/new) to render the full cloud architecture diagram.
 
-    Dev -->|"git push"| GH
-    GH -->|"Webhook / SCM Poll"| Jenkins
-    Jenkins -->|"docker push :build-N-sha"| DH
-    Jenkins -->|"SSH + deploy.sh"| EC2
-    TF -->|"terraform apply\nprovisions"| EC2
-    EC2 -->|"metrics"| CW
+```
+direction right
 
-    subgraph "EC2 Docker Compose Stack"
-        Nginx["Nginx\n(Port 80 / 443)"]
-        Backend["FastAPI Backend\n(Port 8000 internal)"]
-        Qdrant["Qdrant Vector DB\n(Port 6333 internal)"]
-    end
+// ── Actors & External Services ───────────────────────────────────────────────
+Developer [icon: user, label: "Developer\n(git push)"]
+GitHub [icon: github, label: "GitHub\nmain branch"]
+DockerHub [icon: docker, label: "Docker Hub\nvideochat-backend\nvideochat-frontend"]
+Groq [icon: cloud, label: "Groq Cloud API\n(qwen3.8-27b)"]
+YouTube [icon: youtube, label: "YouTube\nTranscript API"]
 
-    EC2 --- Nginx
-    Nginx -->|"/api/ proxy"| Backend
-    Backend --> Qdrant
-    Backend -->|"Transcript fetch\n(proxy-aware)"| YT["YouTube\nTranscript API"]
-    Backend -->|"LLM inference"| Groq["Groq Cloud API\n(qwen3.8-27b)"]
+// ── CI/CD ────────────────────────────────────────────────────────────────────
+Jenkins [icon: jenkins, label: "Jenkins\n(Self-hosted in Docker)\n8 Pipeline Stages"]
+
+// ── Infrastructure (Terraform-provisioned) ───────────────────────────────────
+Terraform [icon: terraform, label: "Terraform\ninfra/main.tf\nus-east-1"]
+CloudWatch [icon: aws-cloudwatch, label: "CloudWatch\nCPU Alarm\nStatus Alarm"]
+
+// ── AWS EC2 Compose Stack ────────────────────────────────────────────────────
+EC2 [icon: aws-ec2, label: "AWS EC2\nt3.micro · Ubuntu 24.04 LTS\n30 GB gp3 EBS"] {
+  Nginx [icon: nginx, label: "Nginx\nPort 80 / 443 (SSL)"]
+  Backend [icon: python, label: "FastAPI Backend\nPort 8000 (internal)"]
+  Qdrant [icon: database, label: "Qdrant Vector DB\nPort 6333 (internal)"]
+}
+
+// ── Connections ──────────────────────────────────────────────────────────────
+Developer > GitHub: git push
+GitHub > Jenkins: Webhook / SCM Poll
+Jenkins > DockerHub: docker push build-N-sha
+Jenkins > EC2: SSH + deploy.sh
+Terraform > EC2: terraform apply (provisions)
+EC2 > CloudWatch: metrics
+
+Nginx > Backend: /api/ proxy
+Backend > Qdrant: vector search / upsert
+Backend > Groq: LLM inference (RAG answer)
+Backend > YouTube: transcript fetch (proxy-aware)
 ```
 
 ---
 
-## 🚀 DevOps Highlights
+## DevOps Highlights
 
 - **8-stage Jenkins declarative pipeline** — Checkout → Lint (parallel Hadolint + Ruff) → pytest → Docker Build → Trivy CVE Scan → Push to Registry → Manual Approval Gate → SSH Deploy with auto-rollback
 - **13 AWS resources** provisioned via Terraform in a single `terraform apply`: VPC, IGW, public subnet, route table + association, security group, IAM role + policy attachments (SSM + CloudWatch) + instance profile, EC2 `t3.micro`, and 2 CloudWatch alarms
-- **Zero-downtime deployment** — `scripts/deploy.sh` polls `/api/health` for 60 s (12 × 5 s retries); auto-rollback to the previous stable image tag on any health-check failure
-- **Multi-stage Docker build** for the frontend: Node 20-slim builder → nginx:1.27-alpine runtime (~25 MB final image vs ~400 MB single-stage)
+- **Zero-downtime deployment** — `scripts/deploy.sh` polls `/api/health` for 60 s (12 x 5 s retries); auto-rollback to the previous stable image tag on any health-check failure
+- **Multi-stage Docker build** for the frontend: Node 20-slim builder to nginx:1.27-alpine runtime (~25 MB final image vs ~400 MB single-stage)
 - **Image tagged `build-{BUILD_NUMBER}-{GIT_SHORT_SHA}`** for full audit trail; `latest` alias also maintained on Docker Hub
 - **Non-root container runtime** — backend runs as `appuser:appgroup`; FastEmbed `BAAI/bge-small-en-v1.5` model baked into the image at build time for < 2 s cold start
 - **Cost-optimised Free Tier infrastructure** — public subnet (no NAT Gateway, saves ~\$32/mo), `t3.micro` with 2 GB swap via `user-data.sh`, 30 GB encrypted gp3 EBS
 
 ---
 
-## 🧰 Tech Stack
+## Tech Stack
 
 ### Application
 
@@ -76,7 +86,7 @@ flowchart LR
 |---|---|
 | Docker & Docker Compose | Container runtime, local stack orchestration |
 | Jenkins (LTS, Dockerised) | CI/CD pipeline server |
-| Terraform ≥ 1.9 | AWS infrastructure provisioning (IaC) |
+| Terraform >= 1.9 | AWS infrastructure provisioning (IaC) |
 | AWS EC2 (`t3.micro`) | Compute host |
 | AWS VPC + Subnets + IGW | Networking |
 | AWS IAM | Instance role, SSM + CloudWatch policies |
@@ -92,12 +102,12 @@ flowchart LR
 |---|---|
 | Embedding model | `BAAI/bge-small-en-v1.5` via FastEmbed |
 | LLM provider | Groq Cloud (serverless inference) |
-| RAG pipeline | YouTube transcript → chunk → embed → Qdrant → retrieve → Groq |
+| RAG pipeline | YouTube transcript -> chunk -> embed -> Qdrant -> retrieve -> Groq |
 | YouTube proxy | Rotating Invidious pool bypasses AWS datacenter IP blocks |
 
 ---
 
-## 🐳 Containerization
+## Containerization
 
 ### Services (docker-compose.yml)
 
@@ -152,7 +162,7 @@ make deploy TAG=1.0 # run scripts/deploy.sh with rollback
 
 ---
 
-## 🔄 CI/CD Pipeline (Jenkins)
+## CI/CD Pipeline (Jenkins)
 
 ### Pipeline Overview
 
@@ -203,7 +213,7 @@ make jenkins-down
 
 ---
 
-## 🏗️ Infrastructure as Code (Terraform)
+## Infrastructure as Code (Terraform)
 
 ### Folder Layout
 
@@ -214,7 +224,7 @@ infra/
 ├── outputs.tf            # Output values (IP, URL, SSH command, etc.)
 ├── versions.tf           # Required Terraform and provider versions
 ├── user-data.sh          # EC2 cloud-init: Docker CE install + 2 GB swap
-└── terraform.tfvars.example  # Variable template (copy → terraform.tfvars)
+└── terraform.tfvars.example  # Variable template (copy to terraform.tfvars)
 ```
 
 ### AWS Resources Provisioned (`us-east-1`)
@@ -224,15 +234,15 @@ infra/
 | `aws_vpc` | `10.0.0.0/16`, DNS support + hostnames enabled |
 | `aws_internet_gateway` | Attached to the VPC |
 | `aws_subnet` (public) | `10.0.1.0/24`, `us-east-1a`, auto-assign public IP |
-| `aws_route_table` | Default route `0.0.0.0/0` → IGW |
+| `aws_route_table` | Default route `0.0.0.0/0` to IGW |
 | `aws_route_table_association` | Associates public subnet with route table |
 | `aws_security_group` | Inbound: port 80 (public), port 22 (restricted to `my_ip`); egress: all |
 | `aws_iam_role` | EC2 assume-role trust policy |
-| `aws_iam_role_policy_attachment` × 2 | `AmazonSSMManagedInstanceCore` + `CloudWatchAgentServerPolicy` |
+| `aws_iam_role_policy_attachment` x2 | `AmazonSSMManagedInstanceCore` + `CloudWatchAgentServerPolicy` |
 | `aws_iam_instance_profile` | Binds IAM role to EC2 instance |
 | `aws_instance` | `t3.micro`, Ubuntu 24.04 LTS, 30 GB encrypted gp3, `user-data.sh` |
-| `aws_cloudwatch_metric_alarm` (CPU) | Triggers when CPU > 80% for 2 × 5-min periods |
-| `aws_cloudwatch_metric_alarm` (Status) | Triggers when EC2 status check fails for 2 × 1-min periods |
+| `aws_cloudwatch_metric_alarm` (CPU) | Triggers when CPU > 80% for 2 x 5-min periods |
+| `aws_cloudwatch_metric_alarm` (Status) | Triggers when EC2 status check fails for 2 x 1-min periods |
 
 ### Terraform Outputs
 
@@ -249,7 +259,7 @@ infra/
 ### Input Variables (`terraform.tfvars`)
 
 ```hcl
-# Copy terraform.tfvars.example → terraform.tfvars
+# Copy terraform.tfvars.example to terraform.tfvars
 aws_region   = "us-east-1"
 environment  = "production"
 key_name     = "your-ec2-keypair-name"
@@ -283,9 +293,9 @@ terraform destroy
 
 ---
 
-## ☁️ Deployment on AWS
+## Deployment on AWS
 
-### End-to-End Flow: `git push` → Live App
+### End-to-End Flow: `git push` to Live App
 
 ```
 1. Developer pushes to main branch on GitHub
@@ -297,8 +307,8 @@ terraform destroy
 4. Jenkins SSHs into the EC2 instance
 5. deploy.sh pulls new images, restarts Docker Compose services
 6. deploy.sh polls /api/health every 5 s (up to 60 s)
-   - HTTP 200 → deployment finalized, old images pruned
-   - Non-200 → automatic rollback to previous stable tag
+   - HTTP 200 -> deployment finalized, old images pruned
+   - Non-200 -> automatic rollback to previous stable tag
 7. App is live at http://<EC2_PUBLIC_IP>
 ```
 
@@ -325,14 +335,14 @@ echo "GROQ_API_KEY=your_key" > /opt/videochat/.env
 #   git push origin main  — or manually trigger in Jenkins UI
 
 # Step 5: Access the app
-open http://$(terraform output -raw instance_public_ip)
+terraform output app_url
 ```
 
 > **Note:** The infrastructure is provisioned on-demand. Run `terraform apply` to bring it up and `terraform destroy` to stop all AWS billing.
 
 ---
 
-## 📊 Monitoring & Health
+## Monitoring & Health
 
 ### Health Endpoint
 
@@ -359,8 +369,8 @@ The endpoint is used by:
 
 | Alarm | Condition | Action |
 |---|---|---|
-| `{env}-videochat-cpu-high` | CPU > 80% for 2 × 5-min periods | Alarm state (no SNS action configured — see Future Improvements) |
-| `{env}-videochat-status-check-failed` | EC2 status check fails for 2 × 1-min | Alarm state |
+| `{env}-videochat-cpu-high` | CPU > 80% for 2 x 5-min periods | Alarm state (no SNS notification configured — see Future Improvements) |
+| `{env}-videochat-status-check-failed` | EC2 status check fails for 2 x 1-min | Alarm state |
 
 ### Logging
 
@@ -375,7 +385,7 @@ docker compose logs -f frontend
 
 ---
 
-## 💻 Local Development
+## Local Development
 
 ### Prerequisites
 
@@ -424,17 +434,17 @@ make check           # full CI quality gate (lint + test)
 
 ---
 
-## 🤖 Application Overview
+## Application Overview
 
 VideoChat AI lets you have a conversation with any YouTube video. It extracts the transcript, chunks and embeds it into Qdrant, and answers questions using retrieval-augmented generation (RAG) via the Groq Cloud LLM API.
 
 ### Features
 
-- 🎥 **YouTube Q&A** — paste any YouTube URL and ask questions about the video content
-- 🎙️ **Audio upload** — upload `.mp3`/`.mp4` files and ask questions about recorded audio
-- ⚡ **Fast retrieval** — `BAAI/bge-small-en-v1.5` embeddings pre-baked into the Docker image; < 2 s startup
-- 📚 **Multi-video library** — index multiple videos and query any of them
-- 🔄 **Proxy-aware** — routes YouTube transcript requests through a configurable proxy to bypass cloud datacenter IP blocks
+- **YouTube Q&A** — paste any YouTube URL and ask questions about the video content
+- **Audio upload** — upload `.mp3`/`.mp4` files and ask questions about recorded audio
+- **Fast retrieval** — `BAAI/bge-small-en-v1.5` embeddings pre-baked into the Docker image; < 2 s startup
+- **Multi-video library** — index multiple videos and query any of them
+- **Proxy-aware** — routes YouTube transcript requests through a configurable proxy to bypass cloud datacenter IP blocks
 
 ### API Endpoints
 
@@ -449,7 +459,7 @@ VideoChat AI lets you have a conversation with any YouTube video. It extracts th
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 videochat-ai/
@@ -472,7 +482,7 @@ videochat-ai/
 │       └── test_api.py           # 10 pytest unit + integration tests
 │
 ├── video-qa-frontend/            # React 19 + Vite frontend
-│   ├── Dockerfile                # Multi-stage: node:20-slim → nginx:1.27-alpine
+│   ├── Dockerfile                # Multi-stage: node:20-slim to nginx:1.27-alpine
 │   ├── nginx.conf                # HTTP/HTTPS reverse proxy config
 │   ├── package.json              # React, Tailwind CSS, Vite, Lucide React
 │   ├── src/
@@ -503,7 +513,7 @@ videochat-ai/
 
 ---
 
-## 🔮 Future Improvements
+## Future Improvements
 
 > Items below are **not yet implemented** and are listed as planned enhancements only.
 
@@ -512,15 +522,15 @@ videochat-ai/
 | **GitHub Actions** | Add `.github/workflows/` for PR checks and branch protection (no Actions workflows exist yet) |
 | **Kubernetes (EKS/Helm)** | Replace Docker Compose on EC2 with a Kubernetes deployment for horizontal scaling |
 | **Terraform Remote Backend** | Migrate local `terraform.tfstate` to S3 + DynamoDB locking for team collaboration and state locking (tfstate is currently gitignored and stored locally) |
-| **SNS Notifications on CloudWatch Alarms** | Add `alarm_actions` to `aws_cloudwatch_metric_alarm` resources to send email/SMS alerts |
+| **SNS Notifications on CloudWatch Alarms** | Add `alarm_actions` to `aws_cloudwatch_metric_alarm` resources — alarms fire but no email/SMS notification is sent |
 | **Prometheus + Grafana** | Add observability layer for request latency, error rates, and Qdrant collection metrics |
 | **ECR (instead of Docker Hub)** | Move images to AWS ECR when image size is reduced below the free-tier threshold |
-| **Managed TLS (ACM + ALB)** | Replace self-signed Nginx certificate with AWS Certificate Manager + Application Load Balancer |
+| **Managed TLS (ACM + ALB)** | Replace the self-signed Nginx certificate with AWS Certificate Manager + Application Load Balancer |
 | **Multi-AZ / Auto Scaling** | High-availability setup across multiple availability zones |
 
 ---
 
-## 📄 License
+## License
 
 MIT — see [LICENSE](LICENSE) if present.
 
