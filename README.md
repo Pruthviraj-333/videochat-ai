@@ -511,7 +511,7 @@ videochat-ai/
 |---|---|
 | **GitHub Actions** | Add `.github/workflows/` for PR checks and branch protection (no Actions workflows exist yet) |
 | **Kubernetes (EKS/Helm)** | Replace Docker Compose on EC2 with a Kubernetes deployment for horizontal scaling |
-| **Terraform Remote Backend** | Migrate `terraform.tfstate` from local to S3 + DynamoDB locking (currently the state file is committed to git) |
+| **Terraform Remote Backend** | Migrate local `terraform.tfstate` to S3 + DynamoDB locking for team collaboration and state locking (tfstate is currently gitignored and stored locally) |
 | **SNS Notifications on CloudWatch Alarms** | Add `alarm_actions` to `aws_cloudwatch_metric_alarm` resources to send email/SMS alerts |
 | **Prometheus + Grafana** | Add observability layer for request latency, error rates, and Qdrant collection metrics |
 | **ECR (instead of Docker Hub)** | Move images to AWS ECR when image size is reduced below the free-tier threshold |
